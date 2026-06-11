@@ -38,7 +38,9 @@ pub fn default_branch(repo: &Path) -> Result<String> {
         repo,
         &["symbolic-ref", "--short", "refs/remotes/origin/HEAD"],
     ) {
-        return Ok(sym.trim_start_matches("origin/").to_string());
+        if let Some(branch) = sym.strip_prefix("origin/") {
+            return Ok(branch.to_string());
+        }
     }
     for candidate in ["main", "master"] {
         if git(
@@ -74,6 +76,6 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         // diretório não é repo git
         let err = git(tmp.path(), &["status"]).unwrap_err();
-        assert!(err.to_string().contains("git"));
+        assert!(err.to_string().contains(&tmp.path().display().to_string()));
     }
 }
