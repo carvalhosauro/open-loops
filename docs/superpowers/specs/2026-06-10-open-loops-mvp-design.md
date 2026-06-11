@@ -199,5 +199,6 @@ Hooks de checkpoint, skills de Claude Code, snapshots push, TUI, integração Li
 Apenas o que já foi debatido e aprovado como direção:
 
 - **Fase 2 — Push + Híbrido:** hook (SessionEnd/Stop) grava snapshot no fim da sessão; `resume` usa snapshot quando existe, fallback no pull. Skill `/loops:resume` injetando o contexto destilado diretamente na nova sessão de IA.
+- **Fase 3 — Outros harnesses:** suporte a fontes de sessão além do Claude Code — Codex CLI, OpenCode e similares. O módulo `sessions` vira camada de adapters (um por harness, detectando formato e localização das sessões de cada um); o MVP já deve manter o parsing de sessões isolado nesse módulo para que novos adapters não toquem o resto do código.
 
-Qualquer evolução além da Fase 2 será debatida em novo ciclo de brainstorming — intencionalmente não especulada aqui.
+Qualquer evolução além da Fase 3 será debatida em novo ciclo de brainstorming — intencionalmente não especulada aqui.
