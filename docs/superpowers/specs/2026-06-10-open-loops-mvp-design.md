@@ -140,6 +140,18 @@ Nasce como ferramenta pessoal, mas estruturada desde o dia 1 para virar projeto 
 - **Padrões de contribuição:** templates de PR e issue em `.github/` (bug report, feature request, template de PR com checklist de testes/cobertura); PRs seguem Conventional Commits — mesmo enquanto o único contribuidor for o autor, os templates documentam o padrão para quem chegar.
 - **Licença open-source:** dual **MIT OR Apache-2.0** (convenção do ecossistema Rust — máxima compatibilidade para adoção e contribuição). Arquivos `LICENSE-MIT` e `LICENSE-APACHE` na raiz desde o primeiro commit de código.
 
+### Documentação
+
+Essencial, com dupla audiência: humanos **e** agentes de IA. Regra de ouro: sempre que possível, exemplo concreto com bloco bash/zsh **colável no terminal** — nunca descrição abstrata quando um comando executável resolve.
+
+- **README.md:** instalação (1 comando por canal: brew, install.sh, cargo), quickstart (`loops init` → `loops` → `loops resume`, com output real de exemplo), e link para `docs/`.
+- **`docs/setup.md`:** setup inicial completo — instalação, `loops init`, estrutura do `config.toml` comentada campo a campo.
+- **`docs/features.md`:** cada comando com exemplo de invocação + output esperado.
+- **`docs/configuration.md`:** todas as chaves do config com default, tipo e exemplo (incl. troca do comando LLM).
+- **`AGENTS.md`/`CLAUDE.md`:** mapa do repo para agentes (já em §DX) — aponta para os docs acima como fonte de verdade; sem duplicar conteúdo.
+- **Docs são parte do Definition of Done:** funcionalidade nova ou mudança de config sem doc atualizada não mergeia (checklist do template de PR).
+- Decisões arquiteturais relevantes registradas em `docs/decisions/` (formato ADR curto) — exigência do post de boas práticas open-source na era LLM.
+
 ### Princípios de engenharia
 
 O repositório nasce otimizado para agentes de IA trabalharem nele, com base em:
