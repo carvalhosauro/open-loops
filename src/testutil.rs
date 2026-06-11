@@ -31,7 +31,6 @@ pub fn init_repo(dir: &Path) {
 }
 
 /// Cria branch a partir do estado atual com 1 commit próprio.
-#[allow(dead_code)]
 pub fn add_branch_with_commit(dir: &Path, branch: &str, file: &str) {
     git(dir, &["checkout", "-b", branch]);
     std::fs::write(dir.join(file), file).unwrap();
