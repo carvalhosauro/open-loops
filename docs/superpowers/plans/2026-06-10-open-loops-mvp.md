@@ -65,7 +65,7 @@ version = "0.1.0"
 edition = "2021"
 license = "MIT OR Apache-2.0"
 description = "Recupere o contexto de trabalhos pausados: o que começou, onde parou, qual o próximo passo"
-repository = "https://github.com/gustavo/open-loops"
+repository = "https://github.com/carvalhosauro/open-loops"
 
 [lib]
 name = "open_loops"
@@ -2004,7 +2004,7 @@ IA e do git — sem você documentar nada.
 cargo install open-loops
 
 # via script (Linux/macOS)
-curl -fsSL https://github.com/gustavo/open-loops/releases/latest/download/open-loops-installer.sh | sh
+curl -fsSL https://github.com/carvalhosauro/open-loops/releases/latest/download/open-loops-installer.sh | sh
 ```
 
 ## Quickstart
@@ -2083,7 +2083,7 @@ ln -s AGENTS.md CLAUDE.md
 ```bash
 cargo install open-loops
 # ou
-curl -fsSL https://github.com/gustavo/open-loops/releases/latest/download/open-loops-installer.sh | sh
+curl -fsSL https://github.com/carvalhosauro/open-loops/releases/latest/download/open-loops-installer.sh | sh
 ```
 
 ## Configurar
