@@ -17,22 +17,41 @@ pub struct Ignores {
 }
 
 impl Ignores {
+    /// Carrega a lista de ignorados a partir de `<base>/ignores.toml`.
+    ///
+    /// Arquivo ausente é tratado como lista vazia.
+    ///
+    /// # Errors
+    ///
+    /// Retorna erro se o arquivo existir mas não puder ser lido ou não for
+    /// TOML válido no formato esperado.
     pub fn load(base: &Path) -> Result<Self> {
         let path = base.join("ignores.toml");
-        let set = if path.exists() {
-            let raw = std::fs::read_to_string(&path)?;
-            toml::from_str::<IgnoreFile>(&raw)
-                .with_context(|| format!("ignores.toml inválido em {}", path.display()))?
-                .ignored
-        } else {
-            BTreeSet::new()
+        let set = match std::fs::read_to_string(&path) {
+            Ok(raw) => {
+                toml::from_str::<IgnoreFile>(&raw)
+                    .with_context(|| format!("ignores.toml inválido em {}", path.display()))?
+                    .ignored
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => BTreeSet::new(),
+            Err(e) => return Err(e).context(format!("lendo {}", path.display())),
         };
         Ok(Self { path, set })
     }
 
+    /// Adiciona `key` à lista de ignorados e persiste em disco imediatamente.
+    ///
+    /// # Errors
+    ///
+    /// Retorna erro se o diretório base não puder ser criado, se o caminho
+    /// não tiver diretório pai, ou se a escrita do arquivo falhar.
     pub fn add(&mut self, key: &str) -> Result<()> {
         self.set.insert(key.to_string());
-        std::fs::create_dir_all(self.path.parent().expect("path tem parent"))?;
+        let parent = self
+            .path
+            .parent()
+            .ok_or_else(|| anyhow::anyhow!("caminho sem diretório pai: {}", self.path.display()))?;
+        std::fs::create_dir_all(parent)?;
         let file = IgnoreFile {
             ignored: self.set.clone(),
         };
