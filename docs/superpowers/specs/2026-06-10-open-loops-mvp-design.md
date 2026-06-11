@@ -113,8 +113,23 @@ Princípio: erro sempre com contexto acionável; nunca abortar a operação inte
 
 - Unit tests por módulo: repos git temporários criados no próprio teste; `.jsonl` sintéticos como fixtures.
 - `distill` testado com LLM fake injetado via config.
-- CI (GitHub Actions): `fmt` + `clippy` + `test` em todo push.
+- CI (GitHub Actions): `fmt` + `clippy` + `test` + cobertura (gate em §DX) em todo push.
 - Release por tag com **cargo-dist**: GitHub Releases (Linux/macOS/Windows), brew tap, install.sh, `cargo install`. Instalação em 1 comando.
+
+### DX e qualidade
+
+- **Pre-commit hooks** via [lefthook](https://github.com/evilmartians/lefthook) (binário único, config YAML versionada no repo, instalado no `just setup`):
+  - `pre-commit`: `cargo fmt --check` + `cargo clippy -- -D warnings` nos arquivos staged.
+  - `commit-msg`: valida formato Conventional Commits.
+  - Testes completos ficam no CI, não no hook — commit deve continuar rápido (<5s).
+- **Cobertura de testes** com `cargo-llvm-cov`, medida no CI:
+  - Gate global: ≥70% de linhas (CI falha abaixo disso).
+  - Alvo para módulos core (`scanner`, `sessions`, `distill`, `cache`): ≥85%.
+  - `cli` e `output` podem ficar abaixo do alvo (camada fina, testada via testes de integração).
+  - PRs não podem reduzir a cobertura global.
+- **Task runner**: `justfile` com `just setup` (instala hooks + toolchain), `just test`, `just lint`, `just fmt`, `just cov`. Um comando por intenção — agente ou humano não precisa decorar flags.
+- **Reprodutibilidade**: `rust-toolchain.toml` pinando a versão do Rust; `.editorconfig`.
+- **Repo agente-friendly**: `AGENTS.md`/`CLAUDE.md` na raiz com mapa do projeto, comandos do justfile e convenções — primeiro arquivo que um agente lê.
 
 ### Princípios de engenharia
 
