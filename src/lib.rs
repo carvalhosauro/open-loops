@@ -3,3 +3,6 @@
 
 pub mod config;
 pub mod ignores;
+pub mod scanner;
+#[cfg(test)]
+pub mod testutil;
