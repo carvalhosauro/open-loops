@@ -131,6 +131,15 @@ Princípio: erro sempre com contexto acionável; nunca abortar a operação inte
 - **Reprodutibilidade**: `rust-toolchain.toml` pinando a versão do Rust; `.editorconfig`.
 - **Repo agente-friendly**: `AGENTS.md`/`CLAUDE.md` na raiz com mapa do projeto, comandos do justfile e convenções — primeiro arquivo que um agente lê.
 
+### Postura open-source
+
+Nasce como ferramenta pessoal, mas estruturada desde o dia 1 para virar projeto público — o custo de nascer certo é baixo; o de migrar depois, alto.
+
+- **Alta superfície de distribuição é essencial:** os N usuários precisam instalar **e atualizar** com comodidade. cargo-dist publica em todos os canais (GitHub Releases multi-OS, brew tap, install.sh, `cargo install`); atualização acontece pelo mesmo canal da instalação (`brew upgrade`, re-rodar install.sh, `cargo install --force`). Nenhum canal exige passo manual além de 1 comando.
+- **Release disciplinado:** gatilho por tag (`vX.Y.Z`, SemVer) → CI gera binários, changelog automático (a partir dos Conventional Commits) e release notes na GitHub Release. Sem release manual.
+- **Padrões de contribuição:** templates de PR e issue em `.github/` (bug report, feature request, template de PR com checklist de testes/cobertura); PRs seguem Conventional Commits — mesmo enquanto o único contribuidor for o autor, os templates documentam o padrão para quem chegar.
+- **Licença open-source:** dual **MIT OR Apache-2.0** (convenção do ecossistema Rust — máxima compatibilidade para adoção e contribuição). Arquivos `LICENSE-MIT` e `LICENSE-APACHE` na raiz desde o primeiro commit de código.
+
 ### Princípios de engenharia
 
 O repositório nasce otimizado para agentes de IA trabalharem nele, com base em:
