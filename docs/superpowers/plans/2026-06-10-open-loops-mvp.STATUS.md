@@ -27,7 +27,7 @@ Subagent-driven development (skill `superpowers:subagent-driven-development`):
 | 3 | Módulo `config` (Config + Store) | ✅ concluída | `d73312d` | spec ✅ / quality ✅ |
 | 4 | Módulo `ignores` | ✅ concluída | `536e3ef` + fix `1253c13` | spec ✅ / quality ✅ (após fixes: sem expect, sem TOCTOU, docs) |
 | 5 | testutil + scanner `git()`/`default_branch()` | ✅ concluída | `e45cdee` + fix `cb4825d` | spec ✅ / quality ✅ (após fixes: strip_prefix estrito, asserção forte) |
-| 6 | Scanner completo (OpenLoop, find_repos, open_loops, scan, helpers) | ⏸️ NÃO INICIADA (dispatch interrompido pelo usuário) | — | — |
+| 6 | Scanner completo (OpenLoop, find_repos, open_loops, scan, helpers) | 🔶 implementada, REVIEWS PENDENTES (implementer rodou antes da interrupção; 12 testes verdes) | `4fc2430` | spec ⬜ / quality ⬜ |
 | 7 | Sessions: trait SessionSource + adapter ClaudeCode | ⬜ pendente | — | — |
 | 8 | Módulo `cache` | ⬜ pendente | — | — |
 | 9 | Módulo `distill` | ⬜ pendente | — | — |
@@ -38,7 +38,7 @@ Subagent-driven development (skill `superpowers:subagent-driven-development`):
 | 14 | cargo-dist + git-cliff (release pipeline) | ⬜ pendente | — | — |
 | 15 | Verificação final contra spec + dogfood cronometrado | ⬜ pendente | — | — |
 
-**Próxima ação ao retomar:** despachar implementer da Task 6 (texto completo está no plano, seção "Task 6"). Seguir ordem 6 → 7 → 8 → 9 → 10 → 11 → 12 → 13 → 14 → 15.
+**Próxima ação ao retomar:** despachar SPEC REVIEWER da Task 6 sobre o commit `4fc2430` (base `cb4825d`) — implementação já existe e os 12 testes passam; falta spec review + quality review (+ fixes se houver). Depois seguir 7 → 8 → 9 → 10 → 11 → 12 → 13 → 14 → 15.
 
 ## Dependências entre tasks
 
