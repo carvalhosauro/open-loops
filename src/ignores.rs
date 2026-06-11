@@ -1,0 +1,68 @@
+//! Loops descartados pelo usuário ("não vale continuar").
+//! Persistido em <base>/ignores.toml, chaves no formato "repo/branch".
+use anyhow::{Context, Result};
+use serde::{Deserialize, Serialize};
+use std::collections::BTreeSet;
+use std::path::{Path, PathBuf};
+
+#[derive(Debug, Default, Serialize, Deserialize)]
+struct IgnoreFile {
+    #[serde(default)]
+    ignored: BTreeSet<String>,
+}
+
+pub struct Ignores {
+    path: PathBuf,
+    set: BTreeSet<String>,
+}
+
+impl Ignores {
+    pub fn load(base: &Path) -> Result<Self> {
+        let path = base.join("ignores.toml");
+        let set = if path.exists() {
+            let raw = std::fs::read_to_string(&path)?;
+            toml::from_str::<IgnoreFile>(&raw)
+                .with_context(|| format!("ignores.toml inválido em {}", path.display()))?
+                .ignored
+        } else {
+            BTreeSet::new()
+        };
+        Ok(Self { path, set })
+    }
+
+    pub fn add(&mut self, key: &str) -> Result<()> {
+        self.set.insert(key.to_string());
+        std::fs::create_dir_all(self.path.parent().expect("path tem parent"))?;
+        let file = IgnoreFile {
+            ignored: self.set.clone(),
+        };
+        std::fs::write(&self.path, toml::to_string_pretty(&file)?)?;
+        Ok(())
+    }
+
+    pub fn contains(&self, key: &str) -> bool {
+        self.set.contains(key)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn vazio_quando_arquivo_nao_existe() {
+        let tmp = tempfile::tempdir().unwrap();
+        let ig = Ignores::load(tmp.path()).unwrap();
+        assert!(!ig.contains("repo/branch"));
+    }
+
+    #[test]
+    fn add_persiste_e_contains_acha() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut ig = Ignores::load(tmp.path()).unwrap();
+        ig.add("app/feat/x").unwrap();
+        let recarregado = Ignores::load(tmp.path()).unwrap();
+        assert!(recarregado.contains("app/feat/x"));
+        assert!(!recarregado.contains("app/feat/y"));
+    }
+}
