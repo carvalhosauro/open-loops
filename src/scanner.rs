@@ -147,6 +147,7 @@ pub fn open_loops(repo: &Path) -> Result<Vec<OpenLoop>> {
         let mut parts = line.split('\t');
         let (Some(branch), Some(sha), Some(date)) = (parts.next(), parts.next(), parts.next())
         else {
+            eprintln!("aviso: linha inesperada do git for-each-ref ignorada: {line:?}");
             continue;
         };
         if branch == default || merged.contains(branch) {
