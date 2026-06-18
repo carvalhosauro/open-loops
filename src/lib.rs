@@ -4,5 +4,6 @@
 pub mod config;
 pub mod ignores;
 pub mod scanner;
+pub mod sessions;
 #[cfg(test)]
 pub mod testutil;
