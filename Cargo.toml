@@ -5,6 +5,7 @@ edition = "2021"
 license = "MIT OR Apache-2.0"
 description = "Recupere o contexto de trabalhos pausados: o que começou, onde parou, qual o próximo passo"
 repository = "https://github.com/gustavo/open-loops"
+homepage = "https://github.com/gustavo/open-loops"
 
 [lib]
 name = "open_loops"
@@ -27,3 +28,8 @@ toml = "0.8"
 assert_cmd = "2"
 predicates = "3"
 tempfile = "3"
+
+# The profile that 'dist' will build with
+[profile.dist]
+inherits = "release"
+lto = "thin"
