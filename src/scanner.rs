@@ -355,4 +355,25 @@ mod tests {
         let (ini, fim) = commit_window(&repo, "main", "feat/x").unwrap();
         assert!(ini <= fim);
     }
+
+    #[test]
+    fn default_branch_detecta_master_fallback() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path();
+        testutil::git(repo, &["init", "-b", "master"]);
+        std::fs::write(repo.join("a.txt"), "a").unwrap();
+        testutil::git(repo, &["add", "."]);
+        testutil::git(repo, &["commit", "-m", "init"]);
+        assert_eq!(default_branch(repo).unwrap(), "master");
+    }
+
+    #[test]
+    fn default_branch_erro_sem_main_nem_master() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path();
+        testutil::git(repo, &["init", "-b", "trunk"]);
+        // sem commits: refs/heads/main e refs/heads/master não existem
+        let err = default_branch(repo).unwrap_err();
+        assert!(err.to_string().contains("não achei a branch default"));
+    }
 }

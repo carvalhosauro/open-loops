@@ -108,3 +108,86 @@ fn resume_sem_match_orienta_usuario() {
         .failure()
         .stderr(predicate::str::contains("nenhum loop bate"));
 }
+
+#[test]
+fn list_e_resume_sem_raizes_orienta_usuario() {
+    let tmp = tempfile::tempdir().unwrap();
+    let home = tmp.path().join("home");
+    // sem init: Store::load retorna Config::default com roots vazio
+    loops(&home)
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("nenhuma raiz configurada"));
+    loops(&home)
+        .args(["resume", "qualquer"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("nenhuma raiz configurada"));
+}
+
+#[test]
+fn ignore_chave_sem_barra_rejeita_com_mensagem_util() {
+    let tmp = tempfile::tempdir().unwrap();
+    let home = tmp.path().join("home");
+    loops(&home)
+        .args(["ignore", "semslash"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("formato esperado: repo/branch"));
+}
+
+#[test]
+fn resume_query_ambigua_lista_candidatos() {
+    let tmp = tempfile::tempdir().unwrap();
+    let home = tmp.path().join("home");
+    let repo = tmp.path().join("projetos/app");
+    std::fs::create_dir_all(&repo).unwrap();
+    git(&repo, &["init", "-b", "main"]);
+    std::fs::write(repo.join("a.txt"), "a").unwrap();
+    git(&repo, &["add", "."]);
+    git(&repo, &["commit", "-m", "init"]);
+
+    git(&repo, &["checkout", "-b", "feat/login"]);
+    std::fs::write(repo.join("b.txt"), "b").unwrap();
+    git(&repo, &["add", "."]);
+    git(&repo, &["commit", "-m", "feat: login"]);
+
+    git(&repo, &["checkout", "main"]);
+    git(&repo, &["checkout", "-b", "feat/signup"]);
+    std::fs::write(repo.join("c.txt"), "c").unwrap();
+    git(&repo, &["add", "."]);
+    git(&repo, &["commit", "-m", "feat: signup"]);
+
+    loops(&home)
+        .arg("init")
+        .arg(tmp.path().join("projetos"))
+        .assert()
+        .success();
+
+    loops(&home)
+        .args(["resume", "feat"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("query ambígua"))
+        .stderr(predicate::str::contains("app/feat/login"))
+        .stderr(predicate::str::contains("app/feat/signup"));
+}
+
+#[test]
+fn list_imprime_warnings_de_repos_quebrados() {
+    let tmp = tempfile::tempdir().unwrap();
+    let home = tmp.path().join("home");
+    let raiz = tmp.path().join("projetos");
+
+    // repo sem commits: default_branch falha → scan gera warning
+    let vazio = raiz.join("vazio");
+    std::fs::create_dir_all(&vazio).unwrap();
+    git(&vazio, &["init", "-b", "main"]);
+
+    loops(&home).arg("init").arg(&raiz).assert().success();
+
+    loops(&home)
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("aviso"));
+}

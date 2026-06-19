@@ -184,4 +184,20 @@ mod tests {
         assert!(doc.contains("abcdef1")); // sha curto
         assert!(doc.contains("sessao1.jsonl"));
     }
+
+    #[test]
+    fn with_sources_sha_curto_quando_head_sha_menor_que_7() {
+        let lp = OpenLoop {
+            repo_name: "app".into(),
+            repo_path: PathBuf::from("/tmp/app"),
+            branch: "feat/x".into(),
+            head_sha: "ab1".into(), // 3 chars < 7
+            last_commit: Utc::now(),
+            ahead: 0,
+            behind: 0,
+        };
+        let doc = with_sources("## Por quê\nconteudo", &lp, &[]);
+        assert!(doc.contains("ab1"));
+        assert!(!doc.contains("ab1\0")); // sem bytes extras
+    }
 }

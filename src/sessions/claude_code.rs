@@ -200,4 +200,87 @@ mod tests {
             .unwrap();
         assert!(ex.is_empty());
     }
+
+    #[test]
+    fn excerpts_inclui_sessao_fora_janela_se_menciona_branch() {
+        let tmp = tempfile::tempdir().unwrap();
+        let projects = tmp.path().to_path_buf();
+        let repo = Path::new("/home/g/app");
+        let dir = projects.join(encode_project_path(repo));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("antiga.jsonl"),
+            concat!(
+                r#"{"type":"user","message":{"content":"implementando feat/login agora"}}"#,
+                "\n",
+            ),
+        )
+        .unwrap();
+
+        let src = ClaudeCode { projects_dir: projects };
+        let now = Utc::now();
+        // janela dois anos atrás — mtime do arquivo é agora (fora da janela)
+        let passado = now - Duration::days(730);
+        let window = (passado - Duration::days(1), passado);
+        let ex = src.excerpts(repo, "feat/login", window, 3, 50).unwrap();
+        assert_eq!(ex.len(), 1, "heurística de menção deve incluir a sessão");
+        assert!(ex[0].text.contains("feat/login"));
+    }
+
+    #[test]
+    fn excerpts_trunca_arquivo_grande_e_pula_linha_cortada() {
+        let tmp = tempfile::tempdir().unwrap();
+        let projects = tmp.path().to_path_buf();
+        let repo = Path::new("/home/g/app");
+        let dir = projects.join(encode_project_path(repo));
+        std::fs::create_dir_all(&dir).unwrap();
+
+        // padding de linhas summary (não extraídas) para forçar arquivo > 1 KB
+        let pad_line = format!(
+            "{{\"type\":\"summary\",\"x\":\"{}\"}}\n",
+            "A".repeat(80)
+        );
+        let mut content = pad_line.repeat(15); // ~1500 bytes
+        content.push_str(
+            r#"{"type":"user","message":{"content":"contexto final"}}"#,
+        );
+        content.push('\n');
+        assert!(content.len() > 1024);
+
+        std::fs::write(dir.join("grande.jsonl"), &content).unwrap();
+
+        let src = ClaudeCode { projects_dir: projects };
+        let now = Utc::now();
+        let window = (now - Duration::days(1), now + Duration::days(1));
+        // max_kb=1 força truncamento: start > 0 → primeira linha do tail é pulada
+        let ex = src.excerpts(repo, "feat/x", window, 3, 1).unwrap();
+        assert_eq!(ex.len(), 1);
+        assert!(ex[0].text.contains("contexto final"));
+    }
+
+    #[test]
+    fn excerpts_pula_sessao_com_apenas_mensagens_sem_texto() {
+        let tmp = tempfile::tempdir().unwrap();
+        let projects = tmp.path().to_path_buf();
+        let repo = Path::new("/home/g/app");
+        let dir = projects.join(encode_project_path(repo));
+        std::fs::create_dir_all(&dir).unwrap();
+        // apenas linhas summary e tool_result — extract_text retorna None para todas
+        std::fs::write(
+            dir.join("vazia.jsonl"),
+            concat!(
+                r#"{"type":"summary","summary":"nada util"}"#,
+                "\n",
+                r#"{"type":"tool_result","content":[]}"#,
+                "\n",
+            ),
+        )
+        .unwrap();
+
+        let src = ClaudeCode { projects_dir: projects };
+        let now = Utc::now();
+        let window = (now - Duration::days(1), now + Duration::days(1));
+        let ex = src.excerpts(repo, "feat/x", window, 3, 50).unwrap();
+        assert!(ex.is_empty(), "sessão sem texto extraível deve ser pulada");
+    }
 }
