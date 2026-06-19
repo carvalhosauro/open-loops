@@ -72,7 +72,13 @@ pub fn run_llm(llm_command: &str, prompt: &str) -> Result<String> {
         .take()
         .ok_or_else(|| anyhow::anyhow!("stdin não disponível para o processo LLM"))?
         .write_all(prompt.as_bytes())
-        .context("falha ao escrever o prompt no stdin do LLM")?;
+        .or_else(|e| {
+            if e.kind() == std::io::ErrorKind::BrokenPipe {
+                Ok(())
+            } else {
+                Err(e).context("falha ao escrever o prompt no stdin do LLM")
+            }
+        })?;
     let out = child
         .wait_with_output()
         .context("falha ao aguardar o processo LLM")?;
