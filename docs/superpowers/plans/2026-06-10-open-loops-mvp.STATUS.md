@@ -1,6 +1,6 @@
 # Status de Execução — Plano MVP open-loops
 
-> Snapshot para retomada de sessão. Atualizado em: 2026-06-11.
+> Snapshot para retomada de sessão. Atualizado em: 2026-06-18. **TODAS AS TASKS COMPLETAS — pronto para merge.**
 > Plano: `docs/superpowers/plans/2026-06-10-open-loops-mvp.md` (15 tasks)
 > Spec: `docs/superpowers/specs/2026-06-10-open-loops-mvp-design.md`
 > Branch de trabalho: `feat/mvp` (base: `main`)
