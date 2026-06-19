@@ -29,3 +29,11 @@ just cov     # cobertura, gate 70% (core: alvo 85%)
 - Testes criam repos git reais em tempdir (`src/testutil.rs`)
 - Docs fazem parte do Definition of Done (checklist do PR)
 - Fonte de verdade dos comandos/config: `docs/features.md` e `docs/configuration.md`
+
+## Release
+
+```bash
+just changelog                      # atualiza CHANGELOG.md
+git add CHANGELOG.md && git commit -m "docs: update changelog"
+git tag v0.1.0 && git push --tags   # CI builda binários + installers + release notes
+```
