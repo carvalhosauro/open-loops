@@ -217,7 +217,9 @@ mod tests {
         )
         .unwrap();
 
-        let src = ClaudeCode { projects_dir: projects };
+        let src = ClaudeCode {
+            projects_dir: projects,
+        };
         let now = Utc::now();
         // window two years ago — file mtime is now (outside the window)
         let passado = now - Duration::days(730);
@@ -236,20 +238,17 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
 
         // padding with summary lines (not extracted) to force file > 1 KB
-        let pad_line = format!(
-            "{{\"type\":\"summary\",\"x\":\"{}\"}}\n",
-            "A".repeat(80)
-        );
+        let pad_line = format!("{{\"type\":\"summary\",\"x\":\"{}\"}}\n", "A".repeat(80));
         let mut content = pad_line.repeat(15); // ~1500 bytes
-        content.push_str(
-            r#"{"type":"user","message":{"content":"contexto final"}}"#,
-        );
+        content.push_str(r#"{"type":"user","message":{"content":"contexto final"}}"#);
         content.push('\n');
         assert!(content.len() > 1024);
 
         std::fs::write(dir.join("grande.jsonl"), &content).unwrap();
 
-        let src = ClaudeCode { projects_dir: projects };
+        let src = ClaudeCode {
+            projects_dir: projects,
+        };
         let now = Utc::now();
         let window = (now - Duration::days(1), now + Duration::days(1));
         // max_kb=1 forces truncation: start > 0 → first line of the tail is skipped
@@ -277,10 +276,15 @@ mod tests {
         )
         .unwrap();
 
-        let src = ClaudeCode { projects_dir: projects };
+        let src = ClaudeCode {
+            projects_dir: projects,
+        };
         let now = Utc::now();
         let window = (now - Duration::days(1), now + Duration::days(1));
         let ex = src.excerpts(repo, "feat/x", window, 3, 50).unwrap();
-        assert!(ex.is_empty(), "session with no extractable text must be skipped");
+        assert!(
+            ex.is_empty(),
+            "session with no extractable text must be skipped"
+        );
     }
 }

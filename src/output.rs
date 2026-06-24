@@ -76,8 +76,18 @@ pub fn render_worktrees(wts: &[Worktree], now: DateTime<Utc>) -> String {
     let mut sorted: Vec<&Worktree> = wts.iter().collect();
     sorted.sort_by_key(|w| (verdict_rank(&w.verdict()), w.last_commit.unwrap_or(epoch)));
 
-    let name_w = sorted.iter().map(|w| w.short_name().len()).max().unwrap_or(8).max(8);
-    let branch_w = sorted.iter().map(|w| branch_label(w).len()).max().unwrap_or(6).max(6);
+    let name_w = sorted
+        .iter()
+        .map(|w| w.short_name().len())
+        .max()
+        .unwrap_or(8)
+        .max(8);
+    let branch_w = sorted
+        .iter()
+        .map(|w| branch_label(w).len())
+        .max()
+        .unwrap_or(6)
+        .max(6);
 
     let mut out = format!(
         "{:<name_w$}  {:<branch_w$}  {:>5}  {:>6}  {:>5}  {}\n",
@@ -88,7 +98,9 @@ pub fn render_worktrees(wts: &[Worktree], now: DateTime<Utc>) -> String {
             "{:<name_w$}  {:<branch_w$}  {:>5}  {:>6}  {:>5}  {}\n",
             w.short_name(),
             branch_label(w),
-            w.last_commit.map(|t| human_age(now, t)).unwrap_or_else(|| "?".into()),
+            w.last_commit
+                .map(|t| human_age(now, t))
+                .unwrap_or_else(|| "?".into()),
             if w.merged { "yes" } else { "no" },
             if w.dirty { "dirty" } else { "clean" },
             w.verdict().label()
@@ -119,7 +131,10 @@ pub fn render_worktrees(wts: &[Worktree], now: DateTime<Utc>) -> String {
     if cmds.is_empty() {
         out.push_str("\n# nothing to clean up.\n");
     } else {
-        out.push_str(&format!("\n# {} worktree(s) to clean up. Copy to run:\n", cmds.len()));
+        out.push_str(&format!(
+            "\n# {} worktree(s) to clean up. Copy to run:\n",
+            cmds.len()
+        ));
         for c in &cmds {
             out.push_str(c);
             out.push('\n');

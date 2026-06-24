@@ -23,9 +23,5 @@ fn main() {
 fn base_dir() -> PathBuf {
     std::env::var_os("OPEN_LOOPS_HOME")
         .map(PathBuf::from)
-        .unwrap_or_else(|| {
-            dirs::home_dir()
-                .expect("HOME not set")
-                .join(".open-loops")
-        })
+        .unwrap_or_else(|| dirs::home_dir().expect("HOME not set").join(".open-loops"))
 }

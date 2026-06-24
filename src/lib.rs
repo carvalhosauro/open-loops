@@ -9,6 +9,6 @@ pub mod ignores;
 pub mod output;
 pub mod scanner;
 pub mod sessions;
-pub mod worktrees;
 #[cfg(test)]
 pub mod testutil;
+pub mod worktrees;

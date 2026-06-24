@@ -1,39 +1,69 @@
-# Funcionalidades
+# Features
 
-## `loops` — inventário
+## `loops` — inventory
 
 ```bash
 loops
-# LOOP                    PARADO HÁ  AHEAD  BEHIND
-# meu-app/feat/login            12d      3       1
+# LOOP                    IDLE FOR  AHEAD  BEHIND
+# my-app/feat/login            12d      3       1
 ```
 
-Branches não mergeadas de todos os repos das raízes configuradas, do mais
-parado para o mais recente. Sem LLM — sempre rápido.
+Unmerged branches across all repos under the configured roots, sorted from
+most idle to most recent. No LLM — always fast.
 
-## `loops resume <query>` — retomada
+## `loops resume <query>` — context resumption
 
 ```bash
 loops resume feat/login
 ```
 
-A query casa por substring com `repo/branch`. Saída: `## Por quê`, `## Feito`,
-`## Falta`, `## Próximo passo` + `## Fontes` (commits e sessões usados — audite
-se desconfiar). Primeira chamada usa o LLM (~30-60s); repetir é instantâneo
-(cache por commit). Sem sessões de IA, o contexto vem só do git e o aviso
-"confiança baixa" aparece.
+The query matches by substring against `repo/branch`. Output: `## Why`,
+`## Done`, `## Missing`, `## Next step` + `## Sources` (commits and sessions
+used — audit if you are unsure). First call invokes the LLM (~30-60s);
+repeating is instant (cache per commit). Without AI sessions, context comes
+from git only and a "low confidence" warning appears.
 
-## `loops ignore <repo/branch>` — descartar
+## `loops ignore <repo/branch>` — dismiss
 
 ```bash
-loops ignore meu-app/feat/experimento-velho
+loops ignore my-app/feat/old-experiment
 ```
 
-Tira o loop da lista (a branch não é tocada). Para reverter, edite
+Removes the loop from the list (the branch is not touched). To undo, edit
 `~/.open-loops/ignores.toml`.
 
-## `loops init <dir>...` — registrar raízes
+## `loops init <dir>...` — register roots
 
 ```bash
 loops init ~/repo
 ```
+
+## `loops worktrees` (alias `wt`) — worktree inventory
+
+```bash
+loops worktrees
+# WORKTREE          BRANCH       IDLE  MERGED  STATE  VERDICT
+# my-app/fix-bug    fix/bug       8d   yes     clean  deletable
+# api/spike-redis   spike/redis   40d  no      clean  cold
+```
+
+Lists every git worktree across the configured roots with a cleanup verdict:
+
+- `deletable` — merged into the default branch and clean; safe to remove.
+- `cold` — not merged, clean; review candidate.
+- `active` — has uncommitted changes; live work, left alone.
+- `prunable` — directory gone / orphaned; `git worktree prune` clears it.
+- `home` — the main worktree; never removed.
+
+For `deletable`/`prunable` worktrees it prints the exact cleanup command to copy.
+It never deletes anything itself.
+
+## `loops completions <shell>` — shell autocomplete
+
+```bash
+loops completions zsh > ~/.zfunc/_loops   # zsh
+loops completions bash > /etc/bash_completion.d/loops
+loops completions fish > ~/.config/fish/completions/loops.fish
+```
+
+Prints a completion script for the given shell (`bash`, `zsh`, `fish`, ...).

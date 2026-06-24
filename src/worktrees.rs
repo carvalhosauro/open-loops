@@ -85,13 +85,16 @@ pub fn worktrees(repo: &Path) -> Result<Vec<Worktree>> {
     let raw = git(repo, &["worktree", "list", "--porcelain"])?;
     let default = default_branch(repo).ok();
     let merged_set: HashSet<String> = match &default {
-        Some(d) => git(repo, &["branch", "--merged", d, "--format=%(refname:short)"])
-            .unwrap_or_default()
-            .lines()
-            .map(|s| s.trim().to_string())
-            // drop the default branch itself: "merged" means merged INTO default
-            .filter(|b| !b.is_empty() && b != d)
-            .collect(),
+        Some(d) => git(
+            repo,
+            &["branch", "--merged", d, "--format=%(refname:short)"],
+        )
+        .unwrap_or_default()
+        .lines()
+        .map(|s| s.trim().to_string())
+        // drop the default branch itself: "merged" means merged INTO default
+        .filter(|b| !b.is_empty() && b != d)
+        .collect(),
         None => HashSet::new(),
     };
     let repo_name = repo
@@ -165,7 +168,10 @@ pub fn worktrees(repo: &Path) -> Result<Vec<Worktree>> {
 pub fn scan_worktrees(roots: &[PathBuf]) -> (Vec<Worktree>, Vec<String>) {
     let repos = find_repos(roots);
     let results: Vec<Result<Vec<Worktree>>> = std::thread::scope(|s| {
-        let handles: Vec<_> = repos.iter().map(|r| s.spawn(move || worktrees(r))).collect();
+        let handles: Vec<_> = repos
+            .iter()
+            .map(|r| s.spawn(move || worktrees(r)))
+            .collect();
         handles
             .into_iter()
             .map(|h| {
@@ -190,7 +196,13 @@ mod tests {
     use super::*;
     use crate::testutil;
 
-    fn wt(branch: Option<&str>, merged: bool, dirty: bool, prunable: bool, is_main: bool) -> Worktree {
+    fn wt(
+        branch: Option<&str>,
+        merged: bool,
+        dirty: bool,
+        prunable: bool,
+        is_main: bool,
+    ) -> Worktree {
         Worktree {
             repo_name: "app".into(),
             repo_path: PathBuf::from("/tmp/app"),
@@ -206,15 +218,36 @@ mod tests {
 
     #[test]
     fn verdict_covers_all_combinations() {
-        assert_eq!(wt(Some("main"), true, false, false, true).verdict(), Verdict::Home);
-        assert_eq!(wt(Some("x"), false, false, true, false).verdict(), Verdict::Prunable);
-        assert_eq!(wt(Some("x"), false, true, false, false).verdict(), Verdict::Active);
-        assert_eq!(wt(Some("x"), true, false, false, false).verdict(), Verdict::Deletable);
-        assert_eq!(wt(Some("x"), false, false, false, false).verdict(), Verdict::Cold);
+        assert_eq!(
+            wt(Some("main"), true, false, false, true).verdict(),
+            Verdict::Home
+        );
+        assert_eq!(
+            wt(Some("x"), false, false, true, false).verdict(),
+            Verdict::Prunable
+        );
+        assert_eq!(
+            wt(Some("x"), false, true, false, false).verdict(),
+            Verdict::Active
+        );
+        assert_eq!(
+            wt(Some("x"), true, false, false, false).verdict(),
+            Verdict::Deletable
+        );
+        assert_eq!(
+            wt(Some("x"), false, false, false, false).verdict(),
+            Verdict::Cold
+        );
         // detached clean -> active
-        assert_eq!(wt(None, false, false, false, false).verdict(), Verdict::Active);
+        assert_eq!(
+            wt(None, false, false, false, false).verdict(),
+            Verdict::Active
+        );
         // is_main beats prunable/dirty
-        assert_eq!(wt(Some("main"), false, true, true, true).verdict(), Verdict::Home);
+        assert_eq!(
+            wt(Some("main"), false, true, true, true).verdict(),
+            Verdict::Home
+        );
     }
 
     #[test]
@@ -269,7 +302,9 @@ mod tests {
         testutil::add_worktree(&repo, &extra, "feat/extra");
 
         let (all, warnings) = scan_worktrees(&[tmp.path().to_path_buf()]);
-        assert!(all.iter().any(|w| w.branch.as_deref() == Some("feat/extra")));
+        assert!(all
+            .iter()
+            .any(|w| w.branch.as_deref() == Some("feat/extra")));
         assert!(warnings.is_empty());
     }
 }

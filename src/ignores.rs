@@ -47,10 +47,9 @@ impl Ignores {
     /// has no parent directory, or if writing the file fails.
     pub fn add(&mut self, key: &str) -> Result<()> {
         self.set.insert(key.to_string());
-        let parent = self
-            .path
-            .parent()
-            .ok_or_else(|| anyhow::anyhow!("path has no parent directory: {}", self.path.display()))?;
+        let parent = self.path.parent().ok_or_else(|| {
+            anyhow::anyhow!("path has no parent directory: {}", self.path.display())
+        })?;
         std::fs::create_dir_all(parent)?;
         let file = IgnoreFile {
             ignored: self.set.clone(),

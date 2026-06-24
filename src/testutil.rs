@@ -41,5 +41,8 @@ pub fn add_branch_with_commit(dir: &Path, branch: &str, file: &str) {
 
 /// Creates a worktree at `path` on a new branch off the current HEAD (counts as merged).
 pub fn add_worktree(repo: &Path, path: &Path, branch: &str) {
-    git(repo, &["worktree", "add", path.to_str().unwrap(), "-b", branch]);
+    git(
+        repo,
+        &["worktree", "add", path.to_str().unwrap(), "-b", branch],
+    );
 }

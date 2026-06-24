@@ -9,11 +9,7 @@ use sessions::SessionSource;
 use std::path::{Path, PathBuf};
 
 #[derive(Parser)]
-#[command(
-    name = "loops",
-    version,
-    about = "Recover the context of paused work"
-)]
+#[command(name = "loops", version, about = "Recover the context of paused work")]
 pub struct Cli {
     #[command(subcommand)]
     pub command: Option<Command>,

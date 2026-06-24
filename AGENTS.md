@@ -24,7 +24,7 @@ just cov     # cobertura, gate 70% (core: alvo 85%)
 
 ## Convenções
 
-- Conventional Commits (hook valida); mensagens de erro em PT, acionáveis
+- Conventional Commits (hook valida); mensagens de erro em EN, acionáveis
 - Parsing de sessão é tolerante: linha ruim = skip + warning, nunca abort
 - Testes criam repos git reais em tempdir (`src/testutil.rs`)
 - Docs fazem parte do Definition of Done (checklist do PR)

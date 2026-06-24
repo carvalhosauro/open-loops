@@ -1,36 +1,36 @@
 # Setup
 
-## Instalar
+## Install
 
 ```bash
 cargo install open-loops
-# ou
+# or
 curl -fsSL https://github.com/carvalhosauro/open-loops/releases/latest/download/open-loops-installer.sh | sh
 ```
 
-## Configurar
+## Configure
 
 ```bash
-loops init ~/repo ~/trabalho
+loops init ~/repo ~/work
 ```
 
-Isso cria `~/.open-loops/config.toml`:
+This creates `~/.open-loops/config.toml`:
 
 ```toml
-# diretórios varridos em busca de repositórios git (até 3 níveis)
-roots = ["/home/voce/repo", "/home/voce/trabalho"]
-# comando que recebe o prompt em stdin e devolve a resposta em stdout
+# directories scanned for git repositories (up to 3 levels deep)
+roots = ["/home/you/repo", "/home/you/work"]
+# command that receives the prompt on stdin and returns the response on stdout
 llm_command = "claude -p"
-# onde estão as sessões do Claude Code
-sessions_dir = "/home/voce/.claude/projects"
-# máximo de sessões usadas por destilação
+# where Claude Code sessions are stored
+sessions_dir = "/home/you/.claude/projects"
+# maximum number of sessions used per distillation
 max_sessions = 3
-# KB lidos do fim de cada sessão
+# KB read from the end of each session
 max_session_kb = 50
 ```
 
-## Verificar
+## Verify
 
 ```bash
-loops   # deve listar suas branches não mergeadas
+loops   # should list your unmerged branches
 ```
