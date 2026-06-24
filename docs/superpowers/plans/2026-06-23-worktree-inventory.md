@@ -11,10 +11,11 @@
 ## Global Constraints
 
 - All user-facing output and error messages in **English** (replaces the prior "erros em PT" rule).
-- Output is **ASCII-only** — no emoji, no non-ASCII glyphs.
+- The `worktrees` command output (table + verdict labels + command block) is **strictly ASCII** — no emoji, no box-drawing, no non-ASCII glyphs (guarded by `worktrees_output_is_ascii`). Elsewhere, prefer ASCII punctuation but existing `—` in prose error messages may stay.
 - Tolerant parsing: a bad git line → skip + warning, never abort (mirror `scanner::scan`).
 - Conventional Commits; commit message subjects in English.
-- All `#[test]` function names in **English** (new and existing). Code comments stay Portuguese (not user-facing; avoid churn).
+- All `#[test]` function names in **English** (new and existing).
+- All code comments in **English** and **minimal** — write a comment only when it explains *why*, not *what*; delete redundant/obvious ones. Migrate and trim existing comments as part of Task 7.
 - Coverage gate 70% (core target 85%) must still pass (`just cov`).
 - `just lint` (clippy `-D warnings`) and `just fmt` must be clean before final commit.
 
@@ -117,8 +118,7 @@ git commit -m "feat(cli): add completions command for shell autocomplete"
 Append to `src/testutil.rs`:
 
 ```rust
-/// Cria uma worktree em `path` numa branch nova `branch` a partir do HEAD atual.
-/// A branch nasce apontando para a base, logo conta como mergeada.
+/// Creates a worktree at `path` on a new branch off the current HEAD (counts as merged).
 pub fn add_worktree(repo: &Path, path: &Path, branch: &str) {
     git(repo, &["worktree", "add", path.to_str().unwrap(), "-b", branch]);
 }
@@ -156,25 +156,25 @@ git commit -m "test: add worktree helper to testutil"
 Create `src/worktrees.rs`:
 
 ```rust
-//! Inventário de worktrees: cruza `git worktree list` com merged/idade/estado.
+//! Worktree inventory: joins `git worktree list` with merged/idle/state signals.
 use crate::scanner::{default_branch, find_repos, git};
 use anyhow::Result;
 use chrono::{DateTime, Utc};
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
-/// Classificação de uma worktree quanto à limpeza.
+/// Cleanup classification of a worktree.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Verdict {
-    /// Worktree principal (checkout da default). Nunca apagável.
+    /// Main worktree (default checkout). Never deletable.
     Home,
-    /// Diretório sumiu / órfã — `git worktree prune` resolve.
+    /// Directory gone / orphaned — cleared by `git worktree prune`.
     Prunable,
-    /// Mudança não commitada ou sem branch claro. Trabalho vivo.
+    /// Uncommitted changes or no clear branch. Live work.
     Active,
-    /// Mergeada na default e limpa — lixo no disco.
+    /// Merged into default and clean — disk clutter.
     Deletable,
-    /// Não-mergeada e limpa — candidata a revisar.
+    /// Not merged and clean — review candidate.
     Cold,
 }
 
@@ -190,7 +190,7 @@ impl Verdict {
     }
 }
 
-/// Uma worktree de um repositório.
+/// A repository worktree.
 #[derive(Debug, Clone)]
 pub struct Worktree {
     pub repo_name: String,
@@ -205,7 +205,7 @@ pub struct Worktree {
 }
 
 impl Worktree {
-    /// Veredito determinístico. Ordem de avaliação importa (primeira que casa vence).
+    /// Deterministic verdict; first matching rule wins.
     pub fn verdict(&self) -> Verdict {
         if self.is_main {
             return Verdict::Home;
@@ -217,13 +217,13 @@ impl Worktree {
             return Verdict::Active;
         }
         match self.branch {
-            None => Verdict::Active, // detached, limpa — seguro: nunca sugere apagar
+            None => Verdict::Active, // detached but clean — safe default
             Some(_) if self.merged => Verdict::Deletable,
             Some(_) => Verdict::Cold,
         }
     }
 
-    /// Nome curto para a tabela: `repo/<basename-da-worktree>`.
+    /// Short table name: `repo/<worktree-basename>`.
     pub fn short_name(&self) -> String {
         let base = self
             .worktree_path
@@ -259,9 +259,9 @@ mod tests {
         assert_eq!(wt(Some("x"), false, true, false, false).verdict(), Verdict::Active);
         assert_eq!(wt(Some("x"), true, false, false, false).verdict(), Verdict::Deletable);
         assert_eq!(wt(Some("x"), false, false, false, false).verdict(), Verdict::Cold);
-        // detached limpa -> active (seguro)
+        // detached clean -> active
         assert_eq!(wt(None, false, false, false, false).verdict(), Verdict::Active);
-        // is_main vence prunable/dirty
+        // is_main beats prunable/dirty
         assert_eq!(wt(Some("main"), false, true, true, true).verdict(), Verdict::Home);
     }
 
@@ -319,18 +319,18 @@ In `src/worktrees.rs`, inside `mod tests`, add (keep the existing `use super::*;
         let repo = tmp.path().join("app");
         testutil::init_repo(&repo);
 
-        // deletable: branch nova off main (mergeada), worktree limpa
+        // deletable: new branch off main (merged), clean worktree
         let del = tmp.path().join("wt-del");
         testutil::add_worktree(&repo, &del, "feat/done");
 
-        // cold: branch com commit próprio (não mergeada), worktree limpa
+        // cold: branch with its own commit (unmerged), clean worktree
         let cold = tmp.path().join("wt-cold");
         testutil::add_worktree(&repo, &cold, "feat/cold");
         std::fs::write(cold.join("c.txt"), "c").unwrap();
         testutil::git(&cold, &["add", "."]);
         testutil::git(&cold, &["commit", "-m", "wip cold"]);
 
-        // active(dirty): branch nova off main, mas com arquivo não commitado
+        // active (dirty): new branch off main with an uncommitted file
         let dirty = tmp.path().join("wt-dirty");
         testutil::add_worktree(&repo, &dirty, "feat/dirty");
         std::fs::write(dirty.join("d.txt"), "d").unwrap();
@@ -345,8 +345,8 @@ In `src/worktrees.rs`, inside `mod tests`, add (keep the existing `use super::*;
         assert_eq!(by_branch("feat/cold").verdict(), Verdict::Cold);
         assert_eq!(by_branch("feat/dirty").verdict(), Verdict::Active);
 
-        // principal vira home
-        let main = all.iter().find(|w| w.is_main).expect("worktree principal");
+        // main becomes home
+        let main = all.iter().find(|w| w.is_main).expect("main worktree");
         assert_eq!(main.verdict(), Verdict::Home);
     }
 
@@ -376,11 +376,11 @@ Expected: FAIL — `worktrees` function not found.
 Add to `src/worktrees.rs` (after the `impl Worktree` block, before `#[cfg(test)]`):
 
 ```rust
-/// Enumera as worktrees de um repositório, classificando cada uma.
+/// Enumerates and classifies a repository's worktrees.
 ///
 /// # Errors
 ///
-/// Retorna `Err` se `git worktree list` falhar.
+/// Returns `Err` if `git worktree list` fails.
 pub fn worktrees(repo: &Path) -> Result<Vec<Worktree>> {
     let raw = git(repo, &["worktree", "list", "--porcelain"])?;
     let default = default_branch(repo).ok();
@@ -418,7 +418,7 @@ pub fn worktrees(repo: &Path) -> Result<Vec<Worktree>> {
             } else if line == "prunable" || line.starts_with("prunable ") {
                 prunable = true;
             }
-            // "detached" => branch permanece None
+            // "detached" => branch stays None
         }
         let Some(wt_path) = wt_path else { continue };
         if bare {
@@ -457,9 +457,9 @@ pub fn worktrees(repo: &Path) -> Result<Vec<Worktree>> {
     Ok(out)
 }
 
-/// Varre todas as worktrees dos repos achados nas raízes, em paralelo.
+/// Scans worktrees of all repos found under the roots, in parallel.
 ///
-/// Falhas em repos individuais viram warnings, nunca abortam.
+/// Per-repo failures become warnings, never abort.
 pub fn scan_worktrees(roots: &[PathBuf]) -> (Vec<Worktree>, Vec<String>) {
     let repos = find_repos(roots);
     let results: Vec<Result<Vec<Worktree>>> = std::thread::scope(|s| {
@@ -586,9 +586,9 @@ fn branch_label(w: &Worktree) -> String {
     w.branch.clone().unwrap_or_else(|| "(detached)".into())
 }
 
-/// Renderiza a tabela de worktrees + bloco de comandos de limpeza (ASCII).
+/// Renders the worktree table + ASCII cleanup-command block.
 ///
-/// Ordem: apagáveis/prunable no topo, depois por idade (mais antiga primeiro).
+/// Order: deletable/prunable first, then oldest idle first.
 pub fn render_worktrees(wts: &[Worktree], now: DateTime<Utc>) -> String {
     if wts.is_empty() {
         return "No worktrees found.\n".into();
@@ -900,16 +900,31 @@ Rename each `fn <pt_name>()` to an English equivalent (keep the asserted behavio
 
 For test names in `config.rs`, `distill.rs`, `cache.rs`, `ignores.rs`, `sessions/*` not listed above (the grep surfaces them), translate each to a clear English name. Comments inside tests stay Portuguese.
 
-- [ ] **Step 10: Run the full suite and lint**
+- [ ] **Step 10: Translate and trim code comments to English**
+
+Find the Portuguese comments still in `src/`:
+
+```bash
+grep -rnE '//' src/ | grep -E 'ã|ç|õ|é|í|ú|â|ê|à'
+```
+
+For every hit (module docs `//!`, doc-comments `///`, inline `//`) in `scanner.rs`, `cli.rs`, `output.rs`, `main.rs`, `config.rs`, `distill.rs`, `cache.rs`, `ignores.rs`, `sessions/mod.rs`, `sessions/claude_code.rs`, `testutil.rs`:
+- Rewrite it in English.
+- Apply the minimal-comment rule: delete comments that merely restate the code (e.g. `// checkout na branch`), keep only those that explain *why* (e.g. the shell-out design rationale in `scanner.rs:1-3`, the "broken pipe" handling in `distill.rs`).
+- `# Errors` doc sections: translate the body (`Retorna `Err` se...` → `Returns `Err` if...`).
+
+Do NOT touch `tests/cli.rs` data strings or doc text inside `docs/` here (handled elsewhere).
+
+- [ ] **Step 11: Run the full suite and lint**
 
 Run: `cargo test && cargo clippy --all-targets -- -D warnings`
 Expected: PASS, no warnings.
 
-- [ ] **Step 11: Commit**
+- [ ] **Step 12: Commit**
 
 ```bash
 git add -A
-git commit -m "refactor: migrate CLI output, errors, and test names to English"
+git commit -m "refactor: migrate CLI output, errors, comments, and test names to English"
 ```
 
 ---
@@ -991,7 +1006,154 @@ git commit -m "refactor(distill): produce resume output in English"
 
 ---
 
-### Task 9: Docs, CLAUDE.md rule, CHANGELOG, final verification
+### Task 9: Quality-focused flow tests
+
+End-to-end tests through the real binary that guard *quality* properties, not just happy-path wiring: cross-repo aggregation, the safety guard (never suggest destroying live/unmerged work), the ASCII guarantee, multi-shell completions, and no-false-positive on a clean environment.
+
+**Files:**
+- Modify: `tests/cli.rs` (append tests)
+
+**Interfaces:** uses the existing `git` and `loops` test helpers in `tests/cli.rs`.
+
+- [ ] **Step 1: Add a helper to build a repo with a worktree**
+
+In `tests/cli.rs`, add near the other helpers:
+
+```rust
+/// Builds a git repo at `repo` (main + 1 commit) and returns its path ready for worktrees.
+fn init_repo(repo: &std::path::Path) {
+    std::fs::create_dir_all(repo).unwrap();
+    git(repo, &["init", "-b", "main"]);
+    std::fs::write(repo.join("a.txt"), "a").unwrap();
+    git(repo, &["add", "."]);
+    git(repo, &["commit", "-m", "init"]);
+}
+```
+
+- [ ] **Step 2: Add the quality flow tests**
+
+```rust
+#[test]
+fn worktrees_aggregates_across_multiple_repos() {
+    let tmp = tempfile::tempdir().unwrap();
+    let home = tmp.path().join("home");
+    let root = tmp.path().join("projetos");
+    for (i, name) in ["app-a", "app-b"].iter().enumerate() {
+        let repo = root.join(name);
+        init_repo(&repo);
+        let wt = tmp.path().join(format!("wt-{i}"));
+        git(&repo, &["worktree", "add", wt.to_str().unwrap(), "-b", "fix/done"]);
+    }
+    loops(&home).arg("init").arg(&root).assert().success();
+
+    loops(&home)
+        .arg("worktrees")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("app-a/wt-0"))
+        .stdout(predicate::str::contains("app-b/wt-1"))
+        // one cleanup command per deletable worktree
+        .stdout(predicate::str::contains("2 worktree(s) to clean up"));
+}
+
+#[test]
+fn worktrees_never_suggests_removing_unmerged_or_dirty() {
+    let tmp = tempfile::tempdir().unwrap();
+    let home = tmp.path().join("home");
+    let root = tmp.path().join("projetos");
+    let repo = root.join("app");
+    init_repo(&repo);
+
+    // cold: unmerged branch with its own commit, clean
+    let cold = tmp.path().join("wt-cold");
+    git(&repo, &["worktree", "add", cold.to_str().unwrap(), "-b", "feat/cold"]);
+    std::fs::write(cold.join("c.txt"), "c").unwrap();
+    git(&cold, &["add", "."]);
+    git(&cold, &["commit", "-m", "wip"]);
+
+    // dirty: branch off main with an uncommitted file
+    let dirty = tmp.path().join("wt-dirty");
+    git(&repo, &["worktree", "add", dirty.to_str().unwrap(), "-b", "feat/dirty"]);
+    std::fs::write(dirty.join("d.txt"), "d").unwrap();
+
+    loops(&home).arg("init").arg(&root).assert().success();
+
+    loops(&home)
+        .arg("worktrees")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("cold"))
+        .stdout(predicate::str::contains("active"))
+        // safety: no destructive command suggested for live/unmerged work
+        .stdout(predicate::str::contains("nothing to clean up"))
+        .stdout(predicate::str::contains("worktree remove").not());
+}
+
+#[test]
+fn worktrees_output_is_ascii() {
+    let tmp = tempfile::tempdir().unwrap();
+    let home = tmp.path().join("home");
+    let root = tmp.path().join("projetos");
+    let repo = root.join("app");
+    init_repo(&repo);
+    let wt = tmp.path().join("wt");
+    git(&repo, &["worktree", "add", wt.to_str().unwrap(), "-b", "fix/done"]);
+    loops(&home).arg("init").arg(&root).assert().success();
+
+    let out = loops(&home).arg("worktrees").assert().success().get_output().stdout.clone();
+    assert!(out.is_ascii(), "worktrees output must be ASCII-only");
+}
+
+#[test]
+fn worktrees_clean_environment_has_no_false_positive() {
+    let tmp = tempfile::tempdir().unwrap();
+    let home = tmp.path().join("home");
+    let root = tmp.path().join("projetos");
+    let repo = root.join("app");
+    init_repo(&repo); // only the main worktree
+    loops(&home).arg("init").arg(&root).assert().success();
+
+    loops(&home)
+        .arg("worktrees")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("home"))
+        .stdout(predicate::str::contains("nothing to clean up"))
+        .stdout(predicate::str::contains("worktree remove").not());
+}
+
+#[test]
+fn completions_for_zsh_and_fish_are_nonempty() {
+    let tmp = tempfile::tempdir().unwrap();
+    let home = tmp.path().join("home");
+    for shell in ["zsh", "fish"] {
+        loops(&home)
+            .arg("completions")
+            .arg(shell)
+            .assert()
+            .success()
+            .stdout(predicate::str::contains("loops"));
+    }
+}
+```
+
+Note: `predicate::str::contains(...).not()` requires `use predicates::prelude::*;` — already imported at the top of `tests/cli.rs`.
+
+- [ ] **Step 3: Run the new tests**
+
+Run: `cargo test --test cli`
+Expected: PASS (all flow tests, including the existing one).
+
+- [ ] **Step 4: Commit**
+
+```bash
+git add tests/cli.rs
+git commit -m "test: add quality-focused worktree and completion flow tests"
+```
+
+---
+
+### Task 10: Docs, CLAUDE.md rule, CHANGELOG, final verification
 
 **Files:**
 - Modify: `docs/features.md` (translate; add `worktrees` and `completions` sections)
@@ -1089,7 +1251,7 @@ git commit -m "docs: english docs, worktrees + completions, error-language rule"
 
 ## Self-Review Notes
 
-- **Spec coverage:** worktrees command (Tasks 3-6), completions (Task 1), ASCII + verdict rule (Tasks 3,5), EN migration incl. errors + resume output + docs + CLAUDE.md (Tasks 7-9), tests with real worktrees (Tasks 2,4,6). All spec sections mapped.
+- **Spec coverage:** worktrees command (Tasks 3-6), completions (Task 1), ASCII + verdict rule (Tasks 3,5), EN migration incl. errors + resume output + comments + test names + docs + CLAUDE.md (Tasks 7,8,10), quality flow tests — cross-repo aggregation, safety guard, ASCII, multi-shell completions, no false positives (Task 9), tests with real worktrees (Tasks 2,4,6). All spec sections mapped.
 - **Out of scope honored:** no `loops clean` deletion command anywhere.
 - **`--json`:** spec deferred it (global flag not yet implemented); not in this plan.
 - **Type consistency:** `Worktree`/`Verdict` field and variant names are used identically in Tasks 3→4→5→6; `render_worktrees`/`scan_worktrees`/`run_worktrees` signatures match across producer and consumer tasks.
