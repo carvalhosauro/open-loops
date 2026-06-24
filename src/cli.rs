@@ -1,11 +1,12 @@
 //! Command definitions and module orchestration.
 use crate::config::Store;
+use crate::distill::Confidence;
 use crate::ignores::Ignores;
 use crate::scanner::{self, OpenLoop};
 use crate::{cache, distill, output, sessions, worktrees};
 use anyhow::{bail, ensure, Result};
 use clap::{Parser, Subcommand};
-use sessions::SessionSource;
+use sessions::{SessionExcerpt, SessionSource};
 use std::path::{Path, PathBuf};
 
 #[derive(Parser)]
@@ -20,7 +21,12 @@ pub enum Command {
     /// Register repository roots (e.g. loops init ~/repo)
     Init { paths: Vec<PathBuf> },
     /// Distill a loop's context: why, done, remaining, next step
-    Resume { query: String },
+    Resume {
+        query: String,
+        /// Show matched git commits and AI sessions without calling the LLM
+        #[arg(long)]
+        dry_run: bool,
+    },
     /// Drop a dead loop from the list (repo/branch format)
     Ignore { key: String },
     /// List git worktrees with a cleanup verdict (alias: wt)
@@ -28,6 +34,71 @@ pub enum Command {
     Worktrees,
     /// Generate a shell completion script (bash, zsh, fish, ...)
     Completions { shell: clap_complete::Shell },
+}
+
+struct ResumeEvidence {
+    default_branch: String,
+    commits: String,
+    diffstat: String,
+    excerpts: Vec<SessionExcerpt>,
+    confidence: Confidence,
+}
+
+fn resolve_loop(base: &Path, query: &str) -> Result<OpenLoop> {
+    let store = Store::new(base.to_path_buf());
+    let cfg = store.load()?;
+    ensure!(
+        !cfg.roots.is_empty(),
+        "no roots configured. Run: loops init <dir-with-your-repos>"
+    );
+    let (found, warnings) = scanner::scan(&cfg.roots);
+    for w in &warnings {
+        eprintln!("warning: {w}");
+    }
+    let q = query.to_lowercase();
+    let matches: Vec<&OpenLoop> = found
+        .iter()
+        .filter(|l| l.key().to_lowercase().contains(&q))
+        .collect();
+    match matches.len() {
+        0 => bail!("no loop matches '{query}'. Run `loops` to see open ones."),
+        1 => Ok(matches[0].clone()),
+        _ => bail!(
+            "ambiguous query, candidates:\n{}",
+            matches
+                .iter()
+                .map(|l| format!("  {}", l.key()))
+                .collect::<Vec<_>>()
+                .join("\n")
+        ),
+    }
+}
+
+fn gather_resume_evidence(base: &Path, lp: &OpenLoop) -> Result<ResumeEvidence> {
+    let store = Store::new(base.to_path_buf());
+    let cfg = store.load()?;
+    let default_branch = scanner::default_branch(&lp.repo_path)?;
+    let commits = scanner::git_log(&lp.repo_path, &default_branch, &lp.branch)?;
+    let diffstat = scanner::diffstat(&lp.repo_path, &default_branch, &lp.branch)?;
+    let window = scanner::commit_window(&lp.repo_path, &default_branch, &lp.branch)?;
+    let source = sessions::claude_code::ClaudeCode {
+        projects_dir: cfg.sessions_dir.clone(),
+    };
+    let excerpts = source.excerpts(
+        &lp.repo_path,
+        &lp.branch,
+        window,
+        cfg.max_sessions,
+        cfg.max_session_kb,
+    )?;
+    let confidence = distill::compute_confidence(&excerpts);
+    Ok(ResumeEvidence {
+        default_branch,
+        commits,
+        diffstat,
+        excerpts,
+        confidence,
+    })
 }
 
 pub fn run_list(base: &Path) -> Result<()> {
@@ -73,63 +144,42 @@ pub fn run_ignore(base: &Path, key: &str) -> Result<()> {
     Ok(())
 }
 
-pub fn run_resume(base: &Path, query: &str) -> Result<()> {
-    let store = Store::new(base.to_path_buf());
-    let cfg = store.load()?;
-    ensure!(
-        !cfg.roots.is_empty(),
-        "no roots configured. Run: loops init <dir-with-your-repos>"
-    );
-    let (found, warnings) = scanner::scan(&cfg.roots);
-    for w in &warnings {
-        eprintln!("warning: {w}");
+pub fn run_resume(base: &Path, query: &str, dry_run: bool) -> Result<()> {
+    let lp = resolve_loop(base, query)?;
+
+    if dry_run {
+        let evidence = gather_resume_evidence(base, &lp)?;
+        let doc = distill::format_dry_run(
+            &lp,
+            &evidence.default_branch,
+            &evidence.commits,
+            &evidence.diffstat,
+            &evidence.excerpts,
+            evidence.confidence,
+        );
+        print!("{doc}");
+        return Ok(());
     }
-    // fuzzy resolution: case-insensitive substring match on the repo/branch key
-    let q = query.to_lowercase();
-    let matches: Vec<&OpenLoop> = found
-        .iter()
-        .filter(|l| l.key().to_lowercase().contains(&q))
-        .collect();
-    let lp = match matches.len() {
-        0 => bail!("no loop matches '{query}'. Run `loops` to see open ones."),
-        1 => matches[0],
-        _ => bail!(
-            "ambiguous query, candidates:\n{}",
-            matches
-                .iter()
-                .map(|l| format!("  {}", l.key()))
-                .collect::<Vec<_>>()
-                .join("\n")
-        ),
-    };
 
     let cache = cache::Cache::new(base);
-    if let Some(hit) = cache.get(lp) {
+    if let Some(hit) = cache.get(&lp) {
         println!("{hit}");
         return Ok(());
     }
 
-    let default = scanner::default_branch(&lp.repo_path)?;
-    let commits = scanner::git_log(&lp.repo_path, &default, &lp.branch)?;
-    let diffstat = scanner::diffstat(&lp.repo_path, &default, &lp.branch)?;
-    let window = scanner::commit_window(&lp.repo_path, &default, &lp.branch)?;
-    let source = sessions::claude_code::ClaudeCode {
-        projects_dir: cfg.sessions_dir.clone(),
-    };
-    let excerpts = source.excerpts(
-        &lp.repo_path,
-        &lp.branch,
-        window,
-        cfg.max_sessions,
-        cfg.max_session_kb,
-    )?;
-    if excerpts.is_empty() {
-        eprintln!("warning: no AI session found — low confidence, context from git only");
-    }
-    let prompt = distill::build_prompt(lp, &default, &commits, &diffstat, &excerpts);
+    let evidence = gather_resume_evidence(base, &lp)?;
+    let prompt = distill::build_prompt(
+        &lp,
+        &evidence.default_branch,
+        &evidence.commits,
+        &evidence.diffstat,
+        &evidence.excerpts,
+    );
+    let store = Store::new(base.to_path_buf());
+    let cfg = store.load()?;
     let answer = distill::run_llm(&cfg.llm_command, &prompt)?;
-    let doc = distill::with_sources(&answer, lp, &excerpts);
-    cache.put(lp, &doc)?;
+    let doc = distill::with_sources(&answer, &lp, &evidence.excerpts, evidence.confidence);
+    cache.put(&lp, &doc)?;
     println!("{doc}");
     Ok(())
 }

@@ -69,7 +69,16 @@ fn full_flow_init_list_resume_cache_ignore() {
         .success()
         .stdout(predicate::str::contains("feat: login wip"))
         .stdout(predicate::str::contains("## Sources"))
-        .stderr(predicate::str::contains("low confidence")); // no AI sessions in the fixture
+        .stdout(predicate::str::contains("**Confidence:** low"));
+
+    // dry-run shows evidence without calling the LLM
+    loops(&home)
+        .args(["resume", "feat/login", "--dry-run"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Dry run — LLM not invoked"))
+        .stdout(predicate::str::contains("feat: login wip"))
+        .stdout(predicate::str::contains("**Confidence:** low"));
 
     // second call comes from cache: works even with a broken LLM
     let cfg = std::fs::read_to_string(&cfg_path).unwrap();

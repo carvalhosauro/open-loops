@@ -7,13 +7,17 @@ use std::path::Path;
 
 pub mod claude_code;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct SessionExcerpt {
     /// Session file name (shown in the Sources section).
     pub source: String,
     pub modified: DateTime<Utc>,
     /// Extracted text (user/assistant messages), already truncated.
     pub text: String,
+    /// Session mtime falls within the branch commit window (±7 days).
+    pub in_window: bool,
+    /// Session content mentions the branch name.
+    pub mentions_branch: bool,
 }
 
 pub trait SessionSource {

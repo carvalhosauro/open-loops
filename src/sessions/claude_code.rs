@@ -78,7 +78,7 @@ impl SessionSource for ClaudeCode {
         }
         let pad = Duration::days(7);
         let (start, end) = (window.0 - pad, window.1 + pad);
-        let mut candidates: Vec<(DateTime<Utc>, PathBuf)> = Vec::new();
+        let mut candidates: Vec<(DateTime<Utc>, PathBuf, bool, bool)> = Vec::new();
         for entry in std::fs::read_dir(&dir)?.flatten() {
             let path = entry.path();
             if path.extension().is_none_or(|e| e != "jsonl") {
@@ -90,19 +90,18 @@ impl SessionSource for ClaudeCode {
             };
             let modified: DateTime<Utc> = modified.into();
             let in_window = modified >= start && modified <= end;
+            let mentions_branch = std::fs::read_to_string(&path)
+                .map(|c| c.contains(branch))
+                .unwrap_or(false);
             // spec heuristic: in the time window OR mentions the branch
-            let relevant = in_window
-                || std::fs::read_to_string(&path)
-                    .map(|c| c.contains(branch))
-                    .unwrap_or(false);
-            if relevant {
-                candidates.push((modified, path));
+            if in_window || mentions_branch {
+                candidates.push((modified, path, in_window, mentions_branch));
             }
         }
         candidates.sort_by(|a, b| b.0.cmp(&a.0)); // most recent first
         candidates.truncate(max_sessions);
         let mut out = Vec::new();
-        for (modified, path) in candidates {
+        for (modified, path, in_window, mentions_branch) in candidates {
             let text = read_tail_text(&path, max_kb * 1024)?;
             if text.is_empty() {
                 continue;
@@ -115,6 +114,8 @@ impl SessionSource for ClaudeCode {
                 source,
                 modified,
                 text,
+                in_window,
+                mentions_branch,
             });
         }
         Ok(out)

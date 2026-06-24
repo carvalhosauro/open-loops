@@ -1,10 +1,23 @@
 # Changelog
 ## [Unreleased]
 
+## [0.1.0] - 2026-06-24
+
+First public release.
+
 ### Highlights
-- `loops worktrees` (alias `wt`) — lists every git worktree across configured roots with a cleanup verdict (`deletable`, `cold`, `active`, `prunable`, `home`); prints exact cleanup commands, never deletes anything.
-- `loops completions <shell>` — prints shell completion scripts for `bash`, `zsh`, `fish`, and others.
-- All CLI output, error messages, comments, test names, and user docs migrated to English.
+- `loops` — cross-repo inventory of unmerged branches, sorted by idle time (<5s).
+- `loops resume` — distills why / done / remaining / next step from git + AI sessions.
+- `loops resume --dry-run` — audit matched commits and sessions before calling the LLM.
+- Confidence score on every resume (`high` / `medium` / `low`) plus auditable `## Sources`.
+- `loops worktrees` (alias `wt`) — worktree inventory with cleanup verdicts.
+- `loops completions <shell>` — shell completion scripts.
+- Install via GitHub Releases (cargo-dist), install.sh, Homebrew tap, and `cargo install`.
+- All CLI output, error messages, comments, test names, and user docs in English.
+
+### Docs
+- README quickstart with real resume output example and demo script.
+- Fix repository/homepage URLs in `Cargo.toml` (`carvalhosauro/open-loops`).
 
 ## unreleased
 
