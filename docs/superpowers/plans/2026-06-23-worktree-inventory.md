@@ -14,7 +14,7 @@
 - Output is **ASCII-only** — no emoji, no non-ASCII glyphs.
 - Tolerant parsing: a bad git line → skip + warning, never abort (mirror `scanner::scan`).
 - Conventional Commits; commit message subjects in English.
-- Code comments and `#[test]` function names stay in Portuguese (not user-facing; avoid churn).
+- All `#[test]` function names in **English** (new and existing). Code comments stay Portuguese (not user-facing; avoid churn).
 - Coverage gate 70% (core target 85%) must still pass (`just cov`).
 - `just lint` (clippy `-D warnings`) and `just fmt` must be clean before final commit.
 
@@ -37,7 +37,7 @@ In `tests/cli.rs`, append:
 
 ```rust
 #[test]
-fn completions_gera_script_para_shell() {
+fn completions_generates_script_for_shell() {
     let tmp = tempfile::tempdir().unwrap();
     let home = tmp.path().join("home");
     loops(&home)
@@ -51,7 +51,7 @@ fn completions_gera_script_para_shell() {
 
 - [ ] **Step 2: Run it to confirm it fails**
 
-Run: `cargo test --test cli completions_gera_script_para_shell`
+Run: `cargo test --test cli completions_generates_script_for_shell`
 Expected: FAIL — `completions` is not a recognized subcommand (clap exits non-zero).
 
 - [ ] **Step 3: Add the dependency**
@@ -92,7 +92,7 @@ Add an arm to the `match cli.command` block (after the `Ignore` arm):
 
 - [ ] **Step 6: Run the test to confirm it passes**
 
-Run: `cargo test --test cli completions_gera_script_para_shell`
+Run: `cargo test --test cli completions_generates_script_for_shell`
 Expected: PASS
 
 - [ ] **Step 7: Commit**
@@ -253,7 +253,7 @@ mod tests {
     }
 
     #[test]
-    fn verdict_cobre_todas_as_combinacoes() {
+    fn verdict_covers_all_combinations() {
         assert_eq!(wt(Some("main"), true, false, false, true).verdict(), Verdict::Home);
         assert_eq!(wt(Some("x"), false, false, true, false).verdict(), Verdict::Prunable);
         assert_eq!(wt(Some("x"), false, true, false, false).verdict(), Verdict::Active);
@@ -266,7 +266,7 @@ mod tests {
     }
 
     #[test]
-    fn short_name_usa_basename() {
+    fn short_name_uses_basename() {
         let w = wt(Some("x"), false, false, false, false);
         assert_eq!(w.short_name(), "app/x");
     }
@@ -314,7 +314,7 @@ In `src/worktrees.rs`, inside `mod tests`, add (keep the existing `use super::*;
     use crate::testutil;
 
     #[test]
-    fn worktrees_classifica_deletable_cold_e_dirty() {
+    fn worktrees_classifies_deletable_cold_and_dirty() {
         let tmp = tempfile::tempdir().unwrap();
         let repo = tmp.path().join("app");
         testutil::init_repo(&repo);
@@ -339,7 +339,7 @@ In `src/worktrees.rs`, inside `mod tests`, add (keep the existing `use super::*;
         let by_branch = |b: &str| {
             all.iter()
                 .find(|w| w.branch.as_deref() == Some(b))
-                .unwrap_or_else(|| panic!("branch {b} ausente"))
+                .unwrap_or_else(|| panic!("branch {b} missing"))
         };
         assert_eq!(by_branch("feat/done").verdict(), Verdict::Deletable);
         assert_eq!(by_branch("feat/cold").verdict(), Verdict::Cold);
@@ -351,7 +351,7 @@ In `src/worktrees.rs`, inside `mod tests`, add (keep the existing `use super::*;
     }
 
     #[test]
-    fn scan_worktrees_agrega_e_nao_aborta() {
+    fn scan_worktrees_aggregates_and_does_not_abort() {
         let tmp = tempfile::tempdir().unwrap();
         let repo = tmp.path().join("app");
         testutil::init_repo(&repo);
@@ -368,7 +368,7 @@ Also add `tempfile` to dev-deps if missing — it is already present (`Cargo.tom
 
 - [ ] **Step 2: Run to confirm failure**
 
-Run: `cargo test --lib worktrees::tests::worktrees_classifica`
+Run: `cargo test --lib worktrees::tests::worktrees_classifies`
 Expected: FAIL — `worktrees` function not found.
 
 - [ ] **Step 3: Implement `worktrees()` and `scan_worktrees()`**
@@ -529,7 +529,7 @@ In `src/output.rs`, inside `mod tests`, add:
     }
 
     #[test]
-    fn render_worktrees_ordena_apagaveis_no_topo_e_mostra_comando() {
+    fn render_worktrees_sorts_deletable_first_and_shows_command() {
         let out = render_worktrees(
             &[
                 wt("feat/cold", false, false, 40),
@@ -552,13 +552,13 @@ In `src/output.rs`, inside `mod tests`, add:
     }
 
     #[test]
-    fn render_worktrees_sem_acao_diz_nothing() {
+    fn render_worktrees_no_action_says_nothing() {
         let out = render_worktrees(&[wt("feat/cold", false, false, 3)], Utc::now());
         assert!(out.contains("nothing to clean up"));
     }
 
     #[test]
-    fn render_worktrees_vazio() {
+    fn render_worktrees_empty() {
         assert!(render_worktrees(&[], Utc::now()).contains("No worktrees found"));
     }
 ```
@@ -683,7 +683,7 @@ In `tests/cli.rs`, append:
 
 ```rust
 #[test]
-fn worktrees_lista_e_sugere_limpeza() {
+fn worktrees_lists_and_suggests_cleanup() {
     let tmp = tempfile::tempdir().unwrap();
     let home = tmp.path().join("home");
     let root = tmp.path().join("projetos");
@@ -713,7 +713,7 @@ fn worktrees_lista_e_sugere_limpeza() {
 
 - [ ] **Step 2: Run to confirm failure**
 
-Run: `cargo test --test cli worktrees_lista_e_sugere_limpeza`
+Run: `cargo test --test cli worktrees_lists_and_suggests_cleanup`
 Expected: FAIL — `worktrees` not a recognized subcommand.
 
 - [ ] **Step 3: Add the command variant in `src/cli.rs`**
@@ -761,7 +761,7 @@ Add an arm (before the `Completions` arm):
 
 - [ ] **Step 6: Run the test to confirm it passes**
 
-Run: `cargo test --test cli worktrees_lista_e_sugere_limpeza`
+Run: `cargo test --test cli worktrees_lists_and_suggests_cleanup`
 Expected: PASS
 
 - [ ] **Step 7: Commit**
@@ -873,16 +873,43 @@ Update scanner tests: `default_branch_erro_sem_main_nem_master` asserts `contain
 
 In `fluxo_completo_init_list_resume_cache_ignore`: change `predicate::str::contains("raízes registradas")` → `predicate::str::contains("roots registered")`. Leave repo/branch keys (`meu-app/feat/login`) unchanged — those are data, not translated. Scan the rest of `tests/cli.rs` for any other PT assertion strings (e.g. `ignorado`, `nenhum loop`) and translate them to match the new output (`ignored`, `no loop matches`).
 
-- [ ] **Step 9: Run the full suite and lint**
+- [ ] **Step 9: Rename existing Portuguese test function names to English**
+
+Find every test with a Portuguese name:
+
+```bash
+grep -rnE '#\[test\]' -A1 src/ tests/ | grep -E 'fn .*(_[a-z]*ã|ç|õ|aviso|erro|vazi|mergeada|acha|nao|naum|sem_|cobre|ordena|celebra|completo|fluxo)'
+```
+
+Rename each `fn <pt_name>()` to an English equivalent (keep the asserted behavior). Known renames in already-read files:
+
+| Portuguese | English |
+|---|---|
+| `default_branch_detecta_main` | `default_branch_detects_main` |
+| `git_falha_com_mensagem_contextual` | `git_fails_with_contextual_message` |
+| `find_repos_acha_repos_ate_profundidade_3_e_pula_ocultos` | `find_repos_finds_repos_up_to_depth_3_and_skips_hidden` |
+| `open_loops_acha_nao_mergeada_ignora_mergeada_e_default` | `open_loops_finds_unmerged_ignores_merged_and_default` |
+| `scan_agrega_repos_e_reporta_warning_sem_abortar` | `scan_aggregates_repos_and_reports_warning_without_aborting` |
+| `helpers_de_contexto_retornam_commits_e_janela` | `context_helpers_return_commits_and_window` |
+| `default_branch_detecta_master_fallback` | `default_branch_detects_master_fallback` |
+| `default_branch_erro_sem_main_nem_master` | `default_branch_errors_without_main_or_master` |
+| `human_age_minutos_horas_dias` | `human_age_minutes_hours_days` |
+| `render_table_ordena_mais_parado_primeiro` | `render_table_sorts_most_idle_first` |
+| `render_table_vazia_celebra` | `render_table_empty_celebrates` |
+| `fluxo_completo_init_list_resume_cache_ignore` | `full_flow_init_list_resume_cache_ignore` |
+
+For test names in `config.rs`, `distill.rs`, `cache.rs`, `ignores.rs`, `sessions/*` not listed above (the grep surfaces them), translate each to a clear English name. Comments inside tests stay Portuguese.
+
+- [ ] **Step 10: Run the full suite and lint**
 
 Run: `cargo test && cargo clippy --all-targets -- -D warnings`
 Expected: PASS, no warnings.
 
-- [ ] **Step 10: Commit**
+- [ ] **Step 11: Commit**
 
 ```bash
 git add -A
-git commit -m "refactor: migrate CLI output and errors to English"
+git commit -m "refactor: migrate CLI output, errors, and test names to English"
 ```
 
 ---
