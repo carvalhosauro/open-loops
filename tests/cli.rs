@@ -1,4 +1,4 @@
-//! E2E: binário real, repos git reais, LLM substituído por `cat`.
+//! E2E: real binary, real git repos, LLM replaced by `cat`.
 use assert_cmd::Command;
 use predicates::prelude::*;
 use std::path::Path;
@@ -137,7 +137,7 @@ fn ignore_key_without_slash_rejects_with_helpful_message() {
 }
 
 #[test]
-fn resume_query_ambigua_lista_candidatos() {
+fn resume_ambiguous_query_lists_candidates() {
     let tmp = tempfile::tempdir().unwrap();
     let home = tmp.path().join("home");
     let repo = tmp.path().join("projetos/app");
@@ -174,17 +174,17 @@ fn resume_query_ambigua_lista_candidatos() {
 }
 
 #[test]
-fn list_imprime_warnings_de_repos_quebrados() {
+fn list_prints_warnings_for_broken_repos() {
     let tmp = tempfile::tempdir().unwrap();
     let home = tmp.path().join("home");
-    let raiz = tmp.path().join("projetos");
+    let root = tmp.path().join("projetos");
 
-    // repo sem commits: default_branch falha → scan gera warning
-    let vazio = raiz.join("vazio");
-    std::fs::create_dir_all(&vazio).unwrap();
-    git(&vazio, &["init", "-b", "main"]);
+    // repo with no commits: default_branch fails -> scan emits a warning
+    let empty = root.join("vazio");
+    std::fs::create_dir_all(&empty).unwrap();
+    git(&empty, &["init", "-b", "main"]);
 
-    loops(&home).arg("init").arg(&raiz).assert().success();
+    loops(&home).arg("init").arg(&root).assert().success();
 
     loops(&home)
         .assert()
@@ -351,7 +351,7 @@ fn worktrees_lists_and_suggests_cleanup() {
     std::fs::write(repo.join("a.txt"), "a").unwrap();
     git(&repo, &["add", "."]);
     git(&repo, &["commit", "-m", "init"]);
-    // worktree mergeada (branch nova off main) e limpa => deletable
+    // merged worktree (new branch off main) and clean => deletable
     let wt = tmp.path().join("wt-done");
     git(
         &repo,
@@ -367,6 +367,6 @@ fn worktrees_lists_and_suggests_cleanup() {
         .stdout(predicate::str::contains("deletable"))
         .stdout(predicate::str::contains("worktree remove"));
 
-    // alias wt funciona
+    // the wt alias works
     loops(&home).arg("wt").assert().success();
 }
