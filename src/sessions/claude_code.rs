@@ -50,7 +50,7 @@ fn read_tail_text(path: &Path, max_bytes: u64) -> Result<String> {
     let tail = String::from_utf8_lossy(&raw[start..]);
     let mut lines = tail.lines();
     if start > 0 {
-        lines.next(); // primeira linha pode estar cortada no meio
+        lines.next(); // first line may be cut mid-way
     }
     Ok(lines
         .filter_map(extract_text)
