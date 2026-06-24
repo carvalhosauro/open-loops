@@ -7,6 +7,55 @@ use anyhow::{bail, Context, Result};
 use std::io::Write;
 use std::process::{Command, Stdio};
 
+/// How well AI sessions align with git evidence for a branch.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Confidence {
+    /// Sessions overlap commit window and mention the branch name.
+    High,
+    /// Sessions matched heuristically but alignment is uncertain.
+    Medium,
+    /// No AI sessions — context comes from git only.
+    Low,
+}
+
+/// Derives a confidence level from matched session excerpts.
+pub fn compute_confidence(excerpts: &[SessionExcerpt]) -> Confidence {
+    if excerpts.is_empty() {
+        return Confidence::Low;
+    }
+    if excerpts.iter().any(|e| e.in_window && e.mentions_branch) {
+        Confidence::High
+    } else {
+        Confidence::Medium
+    }
+}
+
+fn confidence_label(c: Confidence) -> &'static str {
+    match c {
+        Confidence::High => "high",
+        Confidence::Medium => "medium",
+        Confidence::Low => "low",
+    }
+}
+
+fn confidence_explanation(c: Confidence) -> &'static str {
+    match c {
+        Confidence::High => "AI sessions align with branch commits",
+        Confidence::Medium => {
+            "AI sessions found but alignment uncertain — audit Sources before trusting"
+        }
+        Confidence::Low => "no AI sessions matched — context from git only",
+    }
+}
+
+fn format_confidence_line(c: Confidence) -> String {
+    format!(
+        "**Confidence:** {} — {}",
+        confidence_label(c),
+        confidence_explanation(c)
+    )
+}
+
 /// Builds the context-reconstruction prompt for an open loop.
 ///
 /// Includes branch, commits, diffstat, and AI session excerpts.
@@ -96,11 +145,17 @@ pub fn run_llm(llm_command: &str, prompt: &str) -> Result<String> {
 ///
 /// Lets the user audit the evidence used in the reconstruction
 /// (mitigates hallucination risk — see spec §Risks).
-pub fn with_sources(answer: &str, lp: &OpenLoop, excerpts: &[SessionExcerpt]) -> String {
+pub fn with_sources(
+    answer: &str,
+    lp: &OpenLoop,
+    excerpts: &[SessionExcerpt],
+    confidence: Confidence,
+) -> String {
     let short_sha = &lp.head_sha[..7.min(lp.head_sha.len())];
     let mut doc = format!(
-        "# {}\n\n{}\n\n## Sources\n\n- git: branch {} (HEAD {})\n",
+        "# {}\n\n{}\n\n{}\n\n## Sources\n\n- git: branch {} (HEAD {})\n",
         lp.key(),
+        format_confidence_line(confidence),
         answer.trim(),
         lp.branch,
         short_sha
@@ -113,6 +168,66 @@ pub fn with_sources(answer: &str, lp: &OpenLoop, excerpts: &[SessionExcerpt]) ->
         ));
     }
     doc
+}
+
+fn session_match_tags(e: &SessionExcerpt) -> String {
+    let mut tags = Vec::new();
+    if e.in_window {
+        tags.push("in commit window");
+    }
+    if e.mentions_branch {
+        tags.push("mentions branch");
+    }
+    if tags.is_empty() {
+        "matched by heuristic".into()
+    } else {
+        tags.join(", ")
+    }
+}
+
+/// Shows git and session evidence that would feed distillation, without calling the LLM.
+pub fn format_dry_run(
+    lp: &OpenLoop,
+    default_branch: &str,
+    commits: &str,
+    diffstat: &str,
+    excerpts: &[SessionExcerpt],
+    confidence: Confidence,
+) -> String {
+    let short_sha = &lp.head_sha[..7.min(lp.head_sha.len())];
+    let mut out = format!(
+        "# {}\n\n{}\n\n\
+         ## Git\n\n\
+         - branch: {} (HEAD {})\n\
+         - base: {}\n\
+         - ahead: {}, behind: {}\n\n\
+         ### Commits (base..branch)\n{}\n\n\
+         ### Diffstat\n{}\n\n\
+         ## AI sessions\n",
+        lp.key(),
+        format_confidence_line(confidence),
+        lp.branch,
+        short_sha,
+        default_branch,
+        lp.ahead,
+        lp.behind,
+        commits.trim_end(),
+        diffstat.trim_end(),
+    );
+    if excerpts.is_empty() {
+        out.push_str("none matched\n");
+    } else {
+        for e in excerpts {
+            out.push_str(&format!(
+                "- {} (modified {}) [{}]\n",
+                e.source,
+                e.modified.format("%Y-%m-%d"),
+                session_match_tags(e),
+            ));
+        }
+    }
+    out.push_str("\n---\nDry run — LLM not invoked. Run without `--dry-run` to distill.\n");
+    out
 }
 
 #[cfg(test)]
@@ -140,7 +255,21 @@ mod tests {
             source: "sessao1.jsonl".into(),
             modified: Utc::now(),
             text: "[user] implementa login".into(),
+            in_window: true,
+            mentions_branch: true,
         }
+    }
+
+    #[test]
+    fn compute_confidence_levels() {
+        assert_eq!(compute_confidence(&[]), Confidence::Low);
+        let medium = SessionExcerpt {
+            in_window: true,
+            mentions_branch: false,
+            ..fake_excerpt()
+        };
+        assert_eq!(compute_confidence(&[medium]), Confidence::Medium);
+        assert_eq!(compute_confidence(&[fake_excerpt()]), Confidence::High);
     }
 
     #[test]
@@ -180,10 +309,34 @@ mod tests {
 
     #[test]
     fn with_sources_appends_git_and_sessions() {
-        let doc = with_sources("## Why\nlogin", &fake_loop(), &[fake_excerpt()]);
+        let doc = with_sources(
+            "## Why\nlogin",
+            &fake_loop(),
+            &[fake_excerpt()],
+            Confidence::High,
+        );
         assert!(doc.contains("## Sources"));
+        assert!(doc.contains("**Confidence:** high"));
         assert!(doc.contains("abcdef1")); // short sha
         assert!(doc.contains("sessao1.jsonl"));
+    }
+
+    #[test]
+    fn format_dry_run_lists_evidence_without_llm_sections() {
+        let doc = format_dry_run(
+            &fake_loop(),
+            "main",
+            "abc feat: wip",
+            "x.txt | 2 +",
+            &[fake_excerpt()],
+            Confidence::High,
+        );
+        assert!(doc.contains("**Confidence:** high"));
+        assert!(doc.contains("abc feat: wip"));
+        assert!(doc.contains("sessao1.jsonl"));
+        assert!(doc.contains("in commit window, mentions branch"));
+        assert!(doc.contains("Dry run — LLM not invoked"));
+        assert!(!doc.contains("## Why"));
     }
 
     #[test]
@@ -197,7 +350,7 @@ mod tests {
             ahead: 0,
             behind: 0,
         };
-        let doc = with_sources("## Why\nconteudo", &lp, &[]);
+        let doc = with_sources("## Why\nconteudo", &lp, &[], Confidence::Low);
         assert!(doc.contains("ab1"));
         assert!(!doc.contains("ab1\0")); // no extra bytes
     }

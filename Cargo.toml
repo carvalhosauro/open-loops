@@ -4,8 +4,8 @@ version = "0.1.0"
 edition = "2021"
 license = "MIT OR Apache-2.0"
 description = "Recupere o contexto de trabalhos pausados: o que começou, onde parou, qual o próximo passo"
-repository = "https://github.com/gustavo/open-loops"
-homepage = "https://github.com/gustavo/open-loops"
+repository = "https://github.com/carvalhosauro/open-loops"
+homepage = "https://github.com/carvalhosauro/open-loops"
 
 [lib]
 name = "open_loops"

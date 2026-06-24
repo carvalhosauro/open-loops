@@ -15,13 +15,24 @@ most idle to most recent. No LLM — always fast.
 
 ```bash
 loops resume feat/login
+loops resume feat/login --dry-run   # audit evidence without calling the LLM
 ```
 
 The query matches by substring against `repo/branch`. Output: `## Why`,
 `## Done`, `## Missing`, `## Next step` + `## Sources` (commits and sessions
-used — audit if you are unsure). First call invokes the LLM (~30-60s);
-repeating is instant (cache per commit). Without AI sessions, context comes
-from git only and a "low confidence" warning appears.
+used — **audit this section if confidence is not high**). First call invokes
+the LLM (~30-60s); repeating is instant (cache per commit).
+
+Each resume includes a **confidence score** at the top:
+
+| Score | Meaning |
+|---|---|
+| `high` | AI sessions overlap branch commits and mention the branch name |
+| `medium` | Sessions matched heuristically — verify Sources before trusting |
+| `low` | No AI sessions — context from git only |
+
+`--dry-run` prints the git log, diffstat, and matched sessions that would feed
+the LLM, without invoking it.
 
 ## `loops ignore <repo/branch>` — dismiss
 

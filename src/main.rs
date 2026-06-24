@@ -8,7 +8,7 @@ fn main() {
     let result = match cli.command {
         None => cli::run_list(&base),
         Some(Command::Init { paths }) => cli::run_init(&base, &paths),
-        Some(Command::Resume { query }) => cli::run_resume(&base, &query),
+        Some(Command::Resume { query, dry_run }) => cli::run_resume(&base, &query, dry_run),
         Some(Command::Ignore { key }) => cli::run_ignore(&base, &key),
         Some(Command::Worktrees) => cli::run_worktrees(&base),
         Some(Command::Completions { shell }) => cli::run_completions(shell),
