@@ -154,7 +154,7 @@ mod tests {
             "[assistant] vou criar feat/login"
         );
         assert!(extract_text(meta).is_none());
-        assert!(extract_text("linha corrompida não-json").is_none());
+        assert!(extract_text("corrupted non-json line").is_none());
     }
 
     #[test]
@@ -223,7 +223,7 @@ mod tests {
         let passado = now - Duration::days(730);
         let window = (passado - Duration::days(1), passado);
         let ex = src.excerpts(repo, "feat/login", window, 3, 50).unwrap();
-        assert_eq!(ex.len(), 1, "heurística de menção deve incluir a sessão");
+        assert_eq!(ex.len(), 1, "mention heuristic must include the session");
         assert!(ex[0].text.contains("feat/login"));
     }
 
@@ -281,6 +281,6 @@ mod tests {
         let now = Utc::now();
         let window = (now - Duration::days(1), now + Duration::days(1));
         let ex = src.excerpts(repo, "feat/x", window, 3, 50).unwrap();
-        assert!(ex.is_empty(), "sessão sem texto extraível deve ser pulada");
+        assert!(ex.is_empty(), "session with no extractable text must be skipped");
     }
 }
