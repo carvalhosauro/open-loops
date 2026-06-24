@@ -68,7 +68,7 @@ fn full_flow_init_list_resume_cache_ignore() {
         .assert()
         .success()
         .stdout(predicate::str::contains("feat: login wip"))
-        .stdout(predicate::str::contains("## Fontes"))
+        .stdout(predicate::str::contains("## Sources"))
         .stderr(predicate::str::contains("low confidence")); // no AI sessions in the fixture
 
     // second call comes from cache: works even with a broken LLM
@@ -82,7 +82,7 @@ fn full_flow_init_list_resume_cache_ignore() {
         .args(["resume", "feat/login"])
         .assert()
         .success()
-        .stdout(predicate::str::contains("## Fontes"));
+        .stdout(predicate::str::contains("## Sources"));
 
     // ignore removes from the list
     loops(&home)

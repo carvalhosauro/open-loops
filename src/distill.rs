@@ -10,7 +10,7 @@ use std::process::{Command, Stdio};
 /// Builds the context-reconstruction prompt for an open loop.
 ///
 /// Includes branch, commits, diffstat, and AI session excerpts.
-/// When there are no sessions, explicitly declares "nenhuma encontrada".
+/// When there are no sessions, explicitly declares none found.
 pub fn build_prompt(
     lp: &OpenLoop,
     default_branch: &str,
@@ -19,22 +19,22 @@ pub fn build_prompt(
     excerpts: &[SessionExcerpt],
 ) -> String {
     let mut p = format!(
-        "Você reconstrói o contexto de uma branch de trabalho pausada.\n\
-         Responda em markdown, em português, com exatamente estas seções:\n\n\
-         ## Por quê\n## Feito\n## Falta\n## Próximo passo\n\n\
-         Seja concreto e direto. Baseie-se APENAS nas evidências abaixo.\n\
-         Se a evidência for insuficiente para uma seção, escreva \"evidência insuficiente\".\n\n\
+        "You reconstruct the context of a paused work branch.\n\
+         Answer in markdown, in English, with exactly these sections:\n\n\
+         ## Why\n## Done\n## Remaining\n## Next step\n\n\
+         Be concrete and direct. Rely ONLY on the evidence below.\n\
+         If the evidence is insufficient for a section, write \"insufficient evidence\".\n\n\
          # Branch\n{key} (base: {default_branch})\n\n\
          # Commits (base..branch)\n{commits}\n\n\
          # Diffstat\n{diffstat}\n",
         key = lp.key(),
     );
     if excerpts.is_empty() {
-        p.push_str("\n# Sessões de IA\nnenhuma encontrada\n");
+        p.push_str("\n# AI sessions\nnone found\n");
     } else {
         for e in excerpts {
             p.push_str(&format!(
-                "\n# Sessão {} (modificada {})\n{}\n",
+                "\n# Session {} (modified {})\n{}\n",
                 e.source,
                 e.modified.format("%Y-%m-%d"),
                 e.text
@@ -92,14 +92,14 @@ pub fn run_llm(llm_command: &str, prompt: &str) -> Result<String> {
     Ok(String::from_utf8_lossy(&out.stdout).into_owned())
 }
 
-/// Appends the `## Fontes` section to the LLM-generated document.
+/// Appends the `## Sources` section to the LLM-generated document.
 ///
 /// Lets the user audit the evidence used in the reconstruction
 /// (mitigates hallucination risk — see spec §Risks).
 pub fn with_sources(answer: &str, lp: &OpenLoop, excerpts: &[SessionExcerpt]) -> String {
     let short_sha = &lp.head_sha[..7.min(lp.head_sha.len())];
     let mut doc = format!(
-        "# {}\n\n{}\n\n## Fontes\n\n- git: branch {} (HEAD {})\n",
+        "# {}\n\n{}\n\n## Sources\n\n- git: branch {} (HEAD {})\n",
         lp.key(),
         answer.trim(),
         lp.branch,
@@ -107,7 +107,7 @@ pub fn with_sources(answer: &str, lp: &OpenLoop, excerpts: &[SessionExcerpt]) ->
     );
     for e in excerpts {
         doc.push_str(&format!(
-            "- sessão: {} (modificada {})\n",
+            "- AI session: {} (modified {})\n",
             e.source,
             e.modified.format("%Y-%m-%d")
         ));
@@ -152,8 +152,8 @@ mod tests {
             "x.txt | 2 +",
             &[fake_excerpt()],
         );
-        assert!(p.contains("## Por quê"));
-        assert!(p.contains("## Próximo passo"));
+        assert!(p.contains("## Why"));
+        assert!(p.contains("## Next step"));
         assert!(p.contains("app/feat/login"));
         assert!(p.contains("abc feat: wip"));
         assert!(p.contains("[user] implementa login"));
@@ -162,7 +162,7 @@ mod tests {
     #[test]
     fn build_prompt_without_sessions_declares_absence() {
         let p = build_prompt(&fake_loop(), "main", "", "", &[]);
-        assert!(p.contains("nenhuma encontrada"));
+        assert!(p.contains("none found"));
     }
 
     #[test]
@@ -180,8 +180,8 @@ mod tests {
 
     #[test]
     fn with_sources_appends_git_and_sessions() {
-        let doc = with_sources("## Por quê\nlogin", &fake_loop(), &[fake_excerpt()]);
-        assert!(doc.contains("## Fontes"));
+        let doc = with_sources("## Why\nlogin", &fake_loop(), &[fake_excerpt()]);
+        assert!(doc.contains("## Sources"));
         assert!(doc.contains("abcdef1")); // short sha
         assert!(doc.contains("sessao1.jsonl"));
     }
@@ -197,7 +197,7 @@ mod tests {
             ahead: 0,
             behind: 0,
         };
-        let doc = with_sources("## Por quê\nconteudo", &lp, &[]);
+        let doc = with_sources("## Why\nconteudo", &lp, &[]);
         assert!(doc.contains("ab1"));
         assert!(!doc.contains("ab1\0")); // no extra bytes
     }
