@@ -1,6 +1,6 @@
-//! Fontes de sessão de IA. Cada harness (Claude Code, futuramente Codex,
-//! OpenCode) vira um adapter deste trait — o resto do código não conhece
-//! formato nem localização de sessão.
+//! AI session sources. Each harness (Claude Code, and future ones like Codex,
+//! OpenCode) becomes an adapter of this trait — the rest of the code does not
+//! know the session format or location.
 use anyhow::Result;
 use chrono::{DateTime, Utc};
 use std::path::Path;
@@ -9,21 +9,21 @@ pub mod claude_code;
 
 #[derive(Debug)]
 pub struct SessionExcerpt {
-    /// Nome do arquivo de sessão (exibido na seção Fontes).
+    /// Session file name (shown in the Sources section).
     pub source: String,
     pub modified: DateTime<Utc>,
-    /// Texto extraído (mensagens user/assistant), já truncado.
+    /// Extracted text (user/assistant messages), already truncated.
     pub text: String,
 }
 
 pub trait SessionSource {
-    /// Trechos das sessões mais relevantes para a branch.
-    /// `window`: intervalo dos commits da branch (sessões fora dele e que não
-    /// mencionam a branch são descartadas).
+    /// Excerpts of the sessions most relevant to the branch.
+    /// `window`: commit time range of the branch (sessions outside it that do
+    /// not mention the branch are discarded).
     ///
     /// # Errors
     ///
-    /// Retorna erro se não for possível ler o diretório de projetos.
+    /// Returns an error if the projects directory cannot be read.
     fn excerpts(
         &self,
         repo_path: &Path,

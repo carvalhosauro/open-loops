@@ -10,20 +10,18 @@ fn main() {
         Some(Command::Init { paths }) => cli::run_init(&base, &paths),
         Some(Command::Resume { query }) => cli::run_resume(&base, &query),
         Some(Command::Ignore { key }) => cli::run_ignore(&base, &key),
+        Some(Command::Worktrees) => cli::run_worktrees(&base),
+        Some(Command::Completions { shell }) => cli::run_completions(shell),
     };
     if let Err(e) = result {
-        eprintln!("erro: {e:#}");
+        eprintln!("error: {e:#}");
         std::process::exit(1);
     }
 }
 
-/// OPEN_LOOPS_HOME serve para testes e instalações não-padrão.
+/// OPEN_LOOPS_HOME overrides the default for tests and non-standard installs.
 fn base_dir() -> PathBuf {
     std::env::var_os("OPEN_LOOPS_HOME")
         .map(PathBuf::from)
-        .unwrap_or_else(|| {
-            dirs::home_dir()
-                .expect("HOME não definido")
-                .join(".open-loops")
-        })
+        .unwrap_or_else(|| dirs::home_dir().expect("HOME not set").join(".open-loops"))
 }

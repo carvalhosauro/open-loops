@@ -1,5 +1,5 @@
-//! Loops descartados pelo usuário ("não vale continuar").
-//! Persistido em <base>/ignores.toml, chaves no formato "repo/branch".
+//! Loops discarded by the user ("not worth continuing").
+//! Persisted at <base>/ignores.toml, keys in "repo/branch" format.
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
@@ -17,40 +17,39 @@ pub struct Ignores {
 }
 
 impl Ignores {
-    /// Carrega a lista de ignorados a partir de `<base>/ignores.toml`.
+    /// Loads the ignore list from `<base>/ignores.toml`.
     ///
-    /// Arquivo ausente é tratado como lista vazia.
+    /// A missing file is treated as an empty list.
     ///
     /// # Errors
     ///
-    /// Retorna erro se o arquivo existir mas não puder ser lido ou não for
-    /// TOML válido no formato esperado.
+    /// Returns an error if the file exists but cannot be read or is not
+    /// valid TOML in the expected format.
     pub fn load(base: &Path) -> Result<Self> {
         let path = base.join("ignores.toml");
         let set = match std::fs::read_to_string(&path) {
             Ok(raw) => {
                 toml::from_str::<IgnoreFile>(&raw)
-                    .with_context(|| format!("ignores.toml inválido em {}", path.display()))?
+                    .with_context(|| format!("invalid ignores.toml at {}", path.display()))?
                     .ignored
             }
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => BTreeSet::new(),
-            Err(e) => return Err(e).context(format!("lendo {}", path.display())),
+            Err(e) => return Err(e).context(format!("reading {}", path.display())),
         };
         Ok(Self { path, set })
     }
 
-    /// Adiciona `key` à lista de ignorados e persiste em disco imediatamente.
+    /// Adds `key` to the ignore list and immediately persists it to disk.
     ///
     /// # Errors
     ///
-    /// Retorna erro se o diretório base não puder ser criado, se o caminho
-    /// não tiver diretório pai, ou se a escrita do arquivo falhar.
+    /// Returns an error if the base directory cannot be created, if the path
+    /// has no parent directory, or if writing the file fails.
     pub fn add(&mut self, key: &str) -> Result<()> {
         self.set.insert(key.to_string());
-        let parent = self
-            .path
-            .parent()
-            .ok_or_else(|| anyhow::anyhow!("caminho sem diretório pai: {}", self.path.display()))?;
+        let parent = self.path.parent().ok_or_else(|| {
+            anyhow::anyhow!("path has no parent directory: {}", self.path.display())
+        })?;
         std::fs::create_dir_all(parent)?;
         let file = IgnoreFile {
             ignored: self.set.clone(),
@@ -69,19 +68,19 @@ mod tests {
     use super::*;
 
     #[test]
-    fn vazio_quando_arquivo_nao_existe() {
+    fn empty_when_file_does_not_exist() {
         let tmp = tempfile::tempdir().unwrap();
         let ig = Ignores::load(tmp.path()).unwrap();
         assert!(!ig.contains("repo/branch"));
     }
 
     #[test]
-    fn add_persiste_e_contains_acha() {
+    fn add_persists_and_contains_finds() {
         let tmp = tempfile::tempdir().unwrap();
         let mut ig = Ignores::load(tmp.path()).unwrap();
         ig.add("app/feat/x").unwrap();
-        let recarregado = Ignores::load(tmp.path()).unwrap();
-        assert!(recarregado.contains("app/feat/x"));
-        assert!(!recarregado.contains("app/feat/y"));
+        let reloaded = Ignores::load(tmp.path()).unwrap();
+        assert!(reloaded.contains("app/feat/x"));
+        assert!(!reloaded.contains("app/feat/y"));
     }
 }

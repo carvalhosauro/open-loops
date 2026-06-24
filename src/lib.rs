@@ -11,3 +11,4 @@ pub mod scanner;
 pub mod sessions;
 #[cfg(test)]
 pub mod testutil;
+pub mod worktrees;

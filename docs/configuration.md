@@ -1,29 +1,29 @@
-# Configuração
+# Configuration
 
-Arquivo: `~/.open-loops/config.toml` (criado pelo `loops init`).
-Override do diretório base: variável `OPEN_LOOPS_HOME`.
+File: `~/.open-loops/config.toml` (created by `loops init`).
+Override the base directory: `OPEN_LOOPS_HOME` environment variable.
 
-| Chave | Tipo | Default | Descrição |
+| Key | Type | Default | Description |
 |---|---|---|---|
-| `roots` | lista de paths | `[]` | Diretórios varridos (3 níveis) em busca de repos |
-| `llm_command` | string | `"claude -p"` | Comando LLM: prompt via stdin, resposta via stdout |
-| `sessions_dir` | path | `~/.claude/projects` | Sessões do Claude Code |
-| `max_sessions` | inteiro | `3` | Sessões usadas por destilação |
-| `max_session_kb` | inteiro | `50` | KB lidos do fim de cada sessão |
+| `roots` | list of paths | `[]` | Directories scanned (3 levels deep) for git repos |
+| `llm_command` | string | `"claude -p"` | LLM command: prompt via stdin, response via stdout |
+| `sessions_dir` | path | `~/.claude/projects` | Claude Code sessions directory |
+| `max_sessions` | integer | `3` | Sessions used per distillation |
+| `max_session_kb` | integer | `50` | KB read from the end of each session |
 
-## Trocar o LLM
+## Changing the LLM
 
-Qualquer comando que leia stdin e escreva stdout serve:
+Any command that reads from stdin and writes to stdout works:
 
 ```toml
 llm_command = "ollama run llama3"
 ```
 
-## Arquivos de estado
+## State files
 
 ```
 ~/.open-loops/
-├── config.toml    # esta configuração
-├── ignores.toml   # loops descartados via `loops ignore`
-└── cache/         # destilações por repo/branch@sha (pode apagar à vontade)
+├── config.toml    # this configuration
+├── ignores.toml   # loops dismissed via `loops ignore`
+└── cache/         # distillations per repo/branch@sha (safe to delete)
 ```

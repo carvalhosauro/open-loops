@@ -1,25 +1,25 @@
-//! Config persistida em <base>/config.toml.
-//! O caminho base vem de fora (main resolve OPEN_LOOPS_HOME ou ~/.open-loops)
-//! para que testes injetem um tempdir — nada aqui lê variáveis de ambiente.
+//! Config persisted at <base>/config.toml.
+//! The base path comes from outside (main resolves OPEN_LOOPS_HOME or ~/.open-loops)
+//! so tests can inject a tempdir — nothing here reads environment variables.
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Config {
-    /// Diretórios onde os repositórios git são procurados.
+    /// Directories where git repositories are searched.
     #[serde(default)]
     pub roots: Vec<PathBuf>,
-    /// Comando que recebe o prompt em stdin e devolve a resposta em stdout.
+    /// Command that receives the prompt on stdin and returns the answer on stdout.
     #[serde(default = "default_llm_command")]
     pub llm_command: String,
-    /// Diretório de sessões do Claude Code.
+    /// Claude Code sessions directory.
     #[serde(default = "default_sessions_dir")]
     pub sessions_dir: PathBuf,
-    /// Máximo de sessões usadas na destilação.
+    /// Maximum number of sessions used in distillation.
     #[serde(default = "default_max_sessions")]
     pub max_sessions: usize,
-    /// KB lidos do fim de cada sessão.
+    /// KB read from the tail of each session.
     #[serde(default = "default_max_session_kb")]
     pub max_session_kb: u64,
 }
@@ -72,14 +72,14 @@ impl Store {
         if !path.exists() {
             return Ok(Config::default());
         }
-        let raw =
-            std::fs::read_to_string(&path).with_context(|| format!("lendo {}", path.display()))?;
-        toml::from_str(&raw).with_context(|| format!("config.toml inválido em {}", path.display()))
+        let raw = std::fs::read_to_string(&path)
+            .with_context(|| format!("reading {}", path.display()))?;
+        toml::from_str(&raw).with_context(|| format!("invalid config.toml at {}", path.display()))
     }
 
     pub fn save(&self, config: &Config) -> Result<()> {
         std::fs::create_dir_all(&self.base)
-            .with_context(|| format!("criando {}", self.base.display()))?;
+            .with_context(|| format!("creating {}", self.base.display()))?;
         std::fs::write(self.config_path(), toml::to_string_pretty(config)?)?;
         Ok(())
     }
@@ -88,7 +88,7 @@ impl Store {
         let mut config = self.load()?;
         for p in paths {
             let abs = std::fs::canonicalize(p)
-                .with_context(|| format!("raiz inexistente: {}", p.display()))?;
+                .with_context(|| format!("nonexistent root: {}", p.display()))?;
             if !config.roots.contains(&abs) {
                 config.roots.push(abs);
             }
@@ -103,7 +103,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn load_sem_arquivo_retorna_default() {
+    fn load_without_file_returns_default() {
         let tmp = tempfile::tempdir().unwrap();
         let store = Store::new(tmp.path().to_path_buf());
         let cfg = store.load().unwrap();
@@ -114,7 +114,7 @@ mod tests {
     }
 
     #[test]
-    fn save_e_load_roundtrip() {
+    fn save_and_load_roundtrip() {
         let tmp = tempfile::tempdir().unwrap();
         let store = Store::new(tmp.path().join("state"));
         let cfg = Config {
@@ -126,10 +126,10 @@ mod tests {
     }
 
     #[test]
-    fn add_roots_canonicaliza_e_deduplica() {
+    fn add_roots_canonicalizes_and_deduplicates() {
         let tmp = tempfile::tempdir().unwrap();
         let store = Store::new(tmp.path().join("state"));
-        let root = tmp.path().join("projetos");
+        let root = tmp.path().join("projects");
         std::fs::create_dir_all(&root).unwrap();
         store.add_roots(std::slice::from_ref(&root)).unwrap();
         let cfg = store.add_roots(std::slice::from_ref(&root)).unwrap();
@@ -138,12 +138,12 @@ mod tests {
     }
 
     #[test]
-    fn add_roots_falha_para_dir_inexistente() {
+    fn add_roots_fails_for_nonexistent_dir() {
         let tmp = tempfile::tempdir().unwrap();
         let store = Store::new(tmp.path().join("state"));
         let err = store
-            .add_roots(&[tmp.path().join("nao-existe")])
+            .add_roots(&[tmp.path().join("does-not-exist")])
             .unwrap_err();
-        assert!(err.to_string().contains("raiz inexistente"));
+        assert!(err.to_string().contains("nonexistent root"));
     }
 }

@@ -1,4 +1,4 @@
-//! E2E: binário real, repos git reais, LLM substituído por `cat`.
+//! E2E: real binary, real git repos, LLM replaced by `cat`.
 use assert_cmd::Command;
 use predicates::prelude::*;
 use std::path::Path;
@@ -16,7 +16,7 @@ fn git(repo: &Path, args: &[&str]) {
         .unwrap()
         .status
         .success();
-    assert!(ok, "git {args:?} falhou");
+    assert!(ok, "git {args:?} failed");
 }
 
 fn loops(home: &Path) -> Command {
@@ -26,7 +26,7 @@ fn loops(home: &Path) -> Command {
 }
 
 #[test]
-fn fluxo_completo_init_list_resume_cache_ignore() {
+fn full_flow_init_list_resume_cache_ignore() {
     let tmp = tempfile::tempdir().unwrap();
     let home = tmp.path().join("home");
     let repo = tmp.path().join("projetos/meu-app");
@@ -40,21 +40,21 @@ fn fluxo_completo_init_list_resume_cache_ignore() {
     git(&repo, &["add", "."]);
     git(&repo, &["commit", "-m", "feat: login wip"]);
 
-    // init registra a raiz
+    // init registers the root
     loops(&home)
         .arg("init")
         .arg(tmp.path().join("projetos"))
         .assert()
         .success()
-        .stdout(predicate::str::contains("raízes registradas"));
+        .stdout(predicate::str::contains("roots registered"));
 
-    // list mostra o loop aberto
+    // list shows the open loop
     loops(&home)
         .assert()
         .success()
         .stdout(predicate::str::contains("meu-app/feat/login"));
 
-    // troca o LLM por `cat`: resume imprime o prompt (que contém os commits)
+    // swap the LLM for `cat`: resume prints the prompt (which contains the commits)
     let cfg_path = home.join("config.toml");
     let cfg = std::fs::read_to_string(&cfg_path).unwrap();
     std::fs::write(
@@ -68,10 +68,10 @@ fn fluxo_completo_init_list_resume_cache_ignore() {
         .assert()
         .success()
         .stdout(predicate::str::contains("feat: login wip"))
-        .stdout(predicate::str::contains("## Fontes"))
-        .stderr(predicate::str::contains("confiança baixa")); // sem sessões de IA no fixture
+        .stdout(predicate::str::contains("## Sources"))
+        .stderr(predicate::str::contains("low confidence")); // no AI sessions in the fixture
 
-    // segunda chamada vem do cache: funciona mesmo com LLM quebrado
+    // second call comes from cache: works even with a broken LLM
     let cfg = std::fs::read_to_string(&cfg_path).unwrap();
     std::fs::write(
         &cfg_path,
@@ -82,9 +82,9 @@ fn fluxo_completo_init_list_resume_cache_ignore() {
         .args(["resume", "feat/login"])
         .assert()
         .success()
-        .stdout(predicate::str::contains("## Fontes"));
+        .stdout(predicate::str::contains("## Sources"));
 
-    // ignore remove da lista
+    // ignore removes from the list
     loops(&home)
         .args(["ignore", "meu-app/feat/login"])
         .assert()
@@ -96,48 +96,48 @@ fn fluxo_completo_init_list_resume_cache_ignore() {
 }
 
 #[test]
-fn resume_sem_match_orienta_usuario() {
+fn resume_no_match_guides_user() {
     let tmp = tempfile::tempdir().unwrap();
     let home = tmp.path().join("home");
-    let raiz = tmp.path().join("projetos");
-    std::fs::create_dir_all(&raiz).unwrap();
-    loops(&home).arg("init").arg(&raiz).assert().success();
+    let root = tmp.path().join("projetos");
+    std::fs::create_dir_all(&root).unwrap();
+    loops(&home).arg("init").arg(&root).assert().success();
     loops(&home)
-        .args(["resume", "nao-existe"])
+        .args(["resume", "does-not-exist"])
         .assert()
         .failure()
-        .stderr(predicate::str::contains("nenhum loop bate"));
+        .stderr(predicate::str::contains("no loop matches"));
 }
 
 #[test]
-fn list_e_resume_sem_raizes_orienta_usuario() {
+fn list_and_resume_without_roots_guides_user() {
     let tmp = tempfile::tempdir().unwrap();
     let home = tmp.path().join("home");
-    // sem init: Store::load retorna Config::default com roots vazio
+    // no init: Store::load returns Config::default with empty roots
     loops(&home)
         .assert()
         .failure()
-        .stderr(predicate::str::contains("nenhuma raiz configurada"));
+        .stderr(predicate::str::contains("no roots configured"));
     loops(&home)
-        .args(["resume", "qualquer"])
+        .args(["resume", "anything"])
         .assert()
         .failure()
-        .stderr(predicate::str::contains("nenhuma raiz configurada"));
+        .stderr(predicate::str::contains("no roots configured"));
 }
 
 #[test]
-fn ignore_chave_sem_barra_rejeita_com_mensagem_util() {
+fn ignore_key_without_slash_rejects_with_helpful_message() {
     let tmp = tempfile::tempdir().unwrap();
     let home = tmp.path().join("home");
     loops(&home)
-        .args(["ignore", "semslash"])
+        .args(["ignore", "noslash"])
         .assert()
         .failure()
-        .stderr(predicate::str::contains("formato esperado: repo/branch"));
+        .stderr(predicate::str::contains("expected format: repo/branch"));
 }
 
 #[test]
-fn resume_query_ambigua_lista_candidatos() {
+fn resume_ambiguous_query_lists_candidates() {
     let tmp = tempfile::tempdir().unwrap();
     let home = tmp.path().join("home");
     let repo = tmp.path().join("projetos/app");
@@ -168,26 +168,205 @@ fn resume_query_ambigua_lista_candidatos() {
         .args(["resume", "feat"])
         .assert()
         .failure()
-        .stderr(predicate::str::contains("query ambígua"))
+        .stderr(predicate::str::contains("ambiguous query"))
         .stderr(predicate::str::contains("app/feat/login"))
         .stderr(predicate::str::contains("app/feat/signup"));
 }
 
 #[test]
-fn list_imprime_warnings_de_repos_quebrados() {
+fn list_prints_warnings_for_broken_repos() {
     let tmp = tempfile::tempdir().unwrap();
     let home = tmp.path().join("home");
-    let raiz = tmp.path().join("projetos");
+    let root = tmp.path().join("projetos");
 
-    // repo sem commits: default_branch falha → scan gera warning
-    let vazio = raiz.join("vazio");
-    std::fs::create_dir_all(&vazio).unwrap();
-    git(&vazio, &["init", "-b", "main"]);
+    // repo with no commits: default_branch fails -> scan emits a warning
+    let empty = root.join("vazio");
+    std::fs::create_dir_all(&empty).unwrap();
+    git(&empty, &["init", "-b", "main"]);
 
-    loops(&home).arg("init").arg(&raiz).assert().success();
+    loops(&home).arg("init").arg(&root).assert().success();
 
     loops(&home)
         .assert()
         .success()
-        .stderr(predicate::str::contains("aviso"));
+        .stderr(predicate::str::contains("warning"));
+}
+
+#[test]
+fn completions_generates_script_for_shell() {
+    let tmp = tempfile::tempdir().unwrap();
+    let home = tmp.path().join("home");
+    loops(&home)
+        .arg("completions")
+        .arg("bash")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("loops"));
+}
+
+/// Builds a git repo at `repo` (main + 1 commit) and returns its path ready for worktrees.
+fn init_repo(repo: &std::path::Path) {
+    std::fs::create_dir_all(repo).unwrap();
+    git(repo, &["init", "-b", "main"]);
+    std::fs::write(repo.join("a.txt"), "a").unwrap();
+    git(repo, &["add", "."]);
+    git(repo, &["commit", "-m", "init"]);
+}
+
+#[test]
+fn worktrees_aggregates_across_multiple_repos() {
+    let tmp = tempfile::tempdir().unwrap();
+    let home = tmp.path().join("home");
+    let root = tmp.path().join("projetos");
+    for (i, name) in ["app-a", "app-b"].iter().enumerate() {
+        let repo = root.join(name);
+        init_repo(&repo);
+        let wt = tmp.path().join(format!("wt-{i}"));
+        git(
+            &repo,
+            &["worktree", "add", wt.to_str().unwrap(), "-b", "fix/done"],
+        );
+    }
+    loops(&home).arg("init").arg(&root).assert().success();
+
+    loops(&home)
+        .arg("worktrees")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("app-a/wt-0"))
+        .stdout(predicate::str::contains("app-b/wt-1"))
+        // one cleanup command per deletable worktree
+        .stdout(predicate::str::contains("2 worktree(s) to clean up"));
+}
+
+#[test]
+fn worktrees_never_suggests_removing_unmerged_or_dirty() {
+    let tmp = tempfile::tempdir().unwrap();
+    let home = tmp.path().join("home");
+    let root = tmp.path().join("projetos");
+    let repo = root.join("app");
+    init_repo(&repo);
+
+    // cold: unmerged branch with its own commit, clean
+    let cold = tmp.path().join("wt-cold");
+    git(
+        &repo,
+        &["worktree", "add", cold.to_str().unwrap(), "-b", "feat/cold"],
+    );
+    std::fs::write(cold.join("c.txt"), "c").unwrap();
+    git(&cold, &["add", "."]);
+    git(&cold, &["commit", "-m", "wip"]);
+
+    // dirty: branch off main with an uncommitted file
+    let dirty = tmp.path().join("wt-dirty");
+    git(
+        &repo,
+        &[
+            "worktree",
+            "add",
+            dirty.to_str().unwrap(),
+            "-b",
+            "feat/dirty",
+        ],
+    );
+    std::fs::write(dirty.join("d.txt"), "d").unwrap();
+
+    loops(&home).arg("init").arg(&root).assert().success();
+
+    loops(&home)
+        .arg("worktrees")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("cold"))
+        .stdout(predicate::str::contains("active"))
+        // safety: no destructive command suggested for live/unmerged work
+        .stdout(predicate::str::contains("nothing to clean up"))
+        .stdout(predicate::str::contains("worktree remove").not());
+}
+
+#[test]
+fn worktrees_output_is_ascii() {
+    let tmp = tempfile::tempdir().unwrap();
+    let home = tmp.path().join("home");
+    let root = tmp.path().join("projetos");
+    let repo = root.join("app");
+    init_repo(&repo);
+    let wt = tmp.path().join("wt");
+    git(
+        &repo,
+        &["worktree", "add", wt.to_str().unwrap(), "-b", "fix/done"],
+    );
+    loops(&home).arg("init").arg(&root).assert().success();
+
+    let out = loops(&home)
+        .arg("worktrees")
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    assert!(out.is_ascii(), "worktrees output must be ASCII-only");
+}
+
+#[test]
+fn worktrees_clean_environment_has_no_false_positive() {
+    let tmp = tempfile::tempdir().unwrap();
+    let home = tmp.path().join("home");
+    let root = tmp.path().join("projetos");
+    let repo = root.join("app");
+    init_repo(&repo); // only the main worktree
+    loops(&home).arg("init").arg(&root).assert().success();
+
+    loops(&home)
+        .arg("worktrees")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("home"))
+        .stdout(predicate::str::contains("nothing to clean up"))
+        .stdout(predicate::str::contains("worktree remove").not());
+}
+
+#[test]
+fn completions_for_zsh_and_fish_are_nonempty() {
+    let tmp = tempfile::tempdir().unwrap();
+    let home = tmp.path().join("home");
+    for shell in ["zsh", "fish"] {
+        loops(&home)
+            .arg("completions")
+            .arg(shell)
+            .assert()
+            .success()
+            .stdout(predicate::str::contains("loops"));
+    }
+}
+
+#[test]
+fn worktrees_lists_and_suggests_cleanup() {
+    let tmp = tempfile::tempdir().unwrap();
+    let home = tmp.path().join("home");
+    let root = tmp.path().join("projetos");
+    let repo = root.join("meu-app");
+    std::fs::create_dir_all(&repo).unwrap();
+    git(&repo, &["init", "-b", "main"]);
+    std::fs::write(repo.join("a.txt"), "a").unwrap();
+    git(&repo, &["add", "."]);
+    git(&repo, &["commit", "-m", "init"]);
+    // merged worktree (new branch off main) and clean => deletable
+    let wt = tmp.path().join("wt-done");
+    git(
+        &repo,
+        &["worktree", "add", wt.to_str().unwrap(), "-b", "fix/done"],
+    );
+
+    loops(&home).arg("init").arg(&root).assert().success();
+
+    loops(&home)
+        .arg("worktrees")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("deletable"))
+        .stdout(predicate::str::contains("worktree remove"));
+
+    // the wt alias works
+    loops(&home).arg("wt").assert().success();
 }
