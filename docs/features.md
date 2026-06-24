@@ -9,7 +9,8 @@ loops
 ```
 
 Unmerged branches across all repos under the configured roots, sorted from
-most idle to most recent. No LLM — always fast.
+most idle to most recent. Progress on stderr: `scanning git repositories…`.
+No LLM — always fast.
 
 ## `loops resume <query>` — context resumption
 
@@ -18,10 +19,12 @@ loops resume feat/login
 loops resume feat/login --dry-run   # audit evidence without calling the LLM
 ```
 
-The query matches by substring against `repo/branch`. Output: `## Why`,
-`## Done`, `## Missing`, `## Next step` + `## Sources` (commits and sessions
-used — **audit this section if confidence is not high**). First call invokes
-the LLM (~30-60s); repeating is instant (cache per commit).
+The query matches by substring against `repo/branch`. Progress on stderr:
+`scanning git…` → `matching AI sessions…` → `distilling…` (skipped for
+`--dry-run` and cache hits). Output on stdout: `## Why`, `## Done`,
+`## Remaining`, `## Next step` + `## Sources` (commits and sessions used —
+**audit this section if confidence is not high**). First call invokes the LLM
+(~30-60s); repeating is instant (cache per commit).
 
 Each resume includes a **confidence score** at the top:
 

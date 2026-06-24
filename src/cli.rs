@@ -44,6 +44,10 @@ struct ResumeEvidence {
     confidence: Confidence,
 }
 
+fn progress(msg: &str) {
+    eprintln!("{msg}");
+}
+
 fn resolve_loop(base: &Path, query: &str) -> Result<OpenLoop> {
     let store = Store::new(base.to_path_buf());
     let cfg = store.load()?;
@@ -81,6 +85,7 @@ fn gather_resume_evidence(base: &Path, lp: &OpenLoop) -> Result<ResumeEvidence> 
     let commits = scanner::git_log(&lp.repo_path, &default_branch, &lp.branch)?;
     let diffstat = scanner::diffstat(&lp.repo_path, &default_branch, &lp.branch)?;
     let window = scanner::commit_window(&lp.repo_path, &default_branch, &lp.branch)?;
+    progress("matching AI sessions…");
     let source = sessions::claude_code::ClaudeCode {
         projects_dir: cfg.sessions_dir.clone(),
     };
@@ -108,6 +113,7 @@ pub fn run_list(base: &Path) -> Result<()> {
         !cfg.roots.is_empty(),
         "no roots configured. Run: loops init <dir-with-your-repos>"
     );
+    progress("scanning git repositories…");
     let (found, warnings) = scanner::scan(&cfg.roots);
     for w in &warnings {
         eprintln!("warning: {w}");
@@ -145,6 +151,7 @@ pub fn run_ignore(base: &Path, key: &str) -> Result<()> {
 }
 
 pub fn run_resume(base: &Path, query: &str, dry_run: bool) -> Result<()> {
+    progress("scanning git…");
     let lp = resolve_loop(base, query)?;
 
     if dry_run {
@@ -177,6 +184,7 @@ pub fn run_resume(base: &Path, query: &str, dry_run: bool) -> Result<()> {
     );
     let store = Store::new(base.to_path_buf());
     let cfg = store.load()?;
+    progress("distilling…");
     let answer = distill::run_llm(&cfg.llm_command, &prompt)?;
     let doc = distill::with_sources(&answer, &lp, &evidence.excerpts, evidence.confidence);
     cache.put(&lp, &doc)?;
@@ -198,6 +206,7 @@ pub fn run_worktrees(base: &Path) -> Result<()> {
         !cfg.roots.is_empty(),
         "no roots configured. Run: loops init <dir-with-your-repos>"
     );
+    progress("scanning git worktrees…");
     let (wts, warnings) = worktrees::scan_worktrees(&cfg.roots);
     for w in &warnings {
         eprintln!("warning: {w}");
