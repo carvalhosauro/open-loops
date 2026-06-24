@@ -6,6 +6,9 @@
 reconstructs resume context from your AI sessions and git — without you
 documenting anything.
 
+All user-facing output is in English: CLI messages, errors, resume sections,
+and docs.
+
 ## Install
 
 ```bash
@@ -27,12 +30,16 @@ loops init ~/repo
 
 # 2. inventory — open loops, most idle first (<5s, no LLM)
 loops
+# scanning git repositories…
 # LOOP                    IDLE FOR  AHEAD  BEHIND
 # my-app/feat/login            12d      3       1
 # api/fix/timeout                 2d      1       0
 
 # 3. audit evidence before distilling (no LLM call)
 loops resume feat/login --dry-run
+# scanning git…
+# matching AI sessions…
+#
 # # my-app/feat/login
 #
 # **Confidence:** medium — AI sessions found but alignment uncertain — audit Sources before trusting
@@ -47,6 +54,10 @@ loops resume feat/login --dry-run
 
 # 4. resume: why, done, remaining, next step + auditable sources
 loops resume feat/login
+# scanning git…
+# matching AI sessions…
+# distilling…
+#
 # # my-app/feat/login
 #
 # **Confidence:** medium — AI sessions found but alignment uncertain — audit Sources before trusting
@@ -70,14 +81,29 @@ loops resume feat/login
 # - AI session: abc123.jsonl (modified 2026-06-18)
 ```
 
+Progress lines go to **stderr** so you can pipe or redirect stdout without
+losing the distilled document. Long steps (`distilling…`) can take ~30–60s on
+a cold run; repeat calls are instant from cache.
+
 State lives in `~/.open-loops/` — nothing is written inside your repos.
 
-Every resume output includes a **confidence score** (`high` / `medium` / `low`)
-and a **Sources** section so you can audit the evidence before trusting the
-distillation.
+## Audit before you trust
 
-Full docs in [`docs/`](docs/): [setup](docs/setup.md) ·
-[features](docs/features.md) · [configuration](docs/configuration.md).
+Every resume ships a **confidence score** and a **`## Sources`** section — not
+metadata for debugging, but the audit trail you use to decide whether to trust
+the distillation.
+
+| Score | Meaning | What to do |
+|---|---|---|
+| `high` | AI sessions overlap branch commits and mention the branch name | Usually safe to continue |
+| `medium` | Sessions matched heuristically | Read **Sources**; confirm sessions match this branch |
+| `low` | No AI sessions matched — context from git only | Treat as a draft; verify **Sources** and diff yourself |
+
+Recommended flow when confidence is not `high`:
+
+1. `loops resume <branch> --dry-run` — inspect matched commits and sessions (no LLM).
+2. Check **`## Sources`** in the full output — do those commits and sessions belong to this work?
+3. Run `loops resume <branch>` only when the evidence looks right.
 
 ## Demo
 
@@ -88,6 +114,11 @@ cargo build --release
 ./scripts/demo.sh          # runs the quickstart flow in a temp dir
 asciinema play docs/demo.cast   # replay the bundled recording
 ```
+
+## Docs
+
+Full reference in [`docs/`](docs/): [setup](docs/setup.md) ·
+[features](docs/features.md) · [configuration](docs/configuration.md).
 
 ## License
 
