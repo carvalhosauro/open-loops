@@ -89,6 +89,8 @@ pub fn worktrees(repo: &Path) -> Result<Vec<Worktree>> {
             .unwrap_or_default()
             .lines()
             .map(|s| s.trim().to_string())
+            // drop the default branch itself: "merged" means merged INTO default
+            .filter(|b| !b.is_empty() && b != d)
             .collect(),
         None => HashSet::new(),
     };
