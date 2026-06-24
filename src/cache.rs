@@ -1,16 +1,16 @@
-//! Cache de destilações em <base>/cache/<repo>/<branch>@<head-sha>.md.
-//! Chavear pelo SHA do HEAD faz o cache invalidar sozinho quando a branch anda.
+//! Distillation cache at <base>/cache/<repo>/<branch>@<head-sha>.md.
+//! Keying by the HEAD SHA makes the cache self-invalidate when the branch advances.
 use crate::scanner::OpenLoop;
 use anyhow::Result;
 use std::path::{Path, PathBuf};
 
-/// Cache de destilações persistidas em disco.
+/// Distillation cache persisted to disk.
 pub struct Cache {
     dir: PathBuf,
 }
 
 impl Cache {
-    /// Cria um `Cache` cujos arquivos ficam em `base/cache/`.
+    /// Creates a `Cache` whose files live under `base/cache/`.
     pub fn new(base: &Path) -> Self {
         Self {
             dir: base.join("cache"),
@@ -18,28 +18,28 @@ impl Cache {
     }
 
     fn path(&self, lp: &OpenLoop) -> PathBuf {
-        // branches têm '/', que não pode virar subdiretório no nome do arquivo
+        // branches contain '/', which cannot appear in a file name
         let branch = lp.branch.replace('/', "__");
         self.dir
             .join(&lp.repo_name)
             .join(format!("{branch}@{}.md", lp.head_sha))
     }
 
-    /// Retorna o conteúdo cacheado para `lp`, ou `None` se não existir.
+    /// Returns the cached content for `lp`, or `None` if it does not exist.
     pub fn get(&self, lp: &OpenLoop) -> Option<String> {
         std::fs::read_to_string(self.path(lp)).ok()
     }
 
-    /// Persiste `content` como destilação de `lp`.
+    /// Persists `content` as the distillation of `lp`.
     ///
     /// # Errors
     ///
-    /// Retorna `Err` se não for possível criar os diretórios ou escrever o arquivo.
+    /// Returns `Err` if the directories cannot be created or the file cannot be written.
     pub fn put(&self, lp: &OpenLoop, content: &str) -> Result<()> {
         let path = self.path(lp);
         std::fs::create_dir_all(
             path.parent()
-                .ok_or_else(|| anyhow::anyhow!("caminho do cache não tem diretório pai"))?,
+                .ok_or_else(|| anyhow::anyhow!("cache path has no parent directory"))?,
         )?;
         std::fs::write(path, content)?;
         Ok(())
@@ -66,20 +66,20 @@ mod tests {
     }
 
     #[test]
-    fn miss_depois_put_depois_hit() {
+    fn miss_then_put_then_hit() {
         let tmp = tempfile::tempdir().unwrap();
         let cache = Cache::new(tmp.path());
         let lp = fake_loop("abc123");
         assert!(cache.get(&lp).is_none());
-        cache.put(&lp, "contexto destilado").unwrap();
-        assert_eq!(cache.get(&lp).unwrap(), "contexto destilado");
+        cache.put(&lp, "distilled context").unwrap();
+        assert_eq!(cache.get(&lp).unwrap(), "distilled context");
     }
 
     #[test]
-    fn head_novo_invalida_sozinho() {
+    fn new_head_self_invalidates() {
         let tmp = tempfile::tempdir().unwrap();
         let cache = Cache::new(tmp.path());
-        cache.put(&fake_loop("sha-velho"), "velho").unwrap();
-        assert!(cache.get(&fake_loop("sha-novo")).is_none());
+        cache.put(&fake_loop("old-sha"), "old").unwrap();
+        assert!(cache.get(&fake_loop("new-sha")).is_none());
     }
 }

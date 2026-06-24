@@ -16,7 +16,7 @@ fn git(repo: &Path, args: &[&str]) {
         .unwrap()
         .status
         .success();
-    assert!(ok, "git {args:?} falhou");
+    assert!(ok, "git {args:?} failed");
 }
 
 fn loops(home: &Path) -> Command {
@@ -26,7 +26,7 @@ fn loops(home: &Path) -> Command {
 }
 
 #[test]
-fn fluxo_completo_init_list_resume_cache_ignore() {
+fn full_flow_init_list_resume_cache_ignore() {
     let tmp = tempfile::tempdir().unwrap();
     let home = tmp.path().join("home");
     let repo = tmp.path().join("projetos/meu-app");
@@ -40,21 +40,21 @@ fn fluxo_completo_init_list_resume_cache_ignore() {
     git(&repo, &["add", "."]);
     git(&repo, &["commit", "-m", "feat: login wip"]);
 
-    // init registra a raiz
+    // init registers the root
     loops(&home)
         .arg("init")
         .arg(tmp.path().join("projetos"))
         .assert()
         .success()
-        .stdout(predicate::str::contains("raízes registradas"));
+        .stdout(predicate::str::contains("roots registered"));
 
-    // list mostra o loop aberto
+    // list shows the open loop
     loops(&home)
         .assert()
         .success()
         .stdout(predicate::str::contains("meu-app/feat/login"));
 
-    // troca o LLM por `cat`: resume imprime o prompt (que contém os commits)
+    // swap the LLM for `cat`: resume prints the prompt (which contains the commits)
     let cfg_path = home.join("config.toml");
     let cfg = std::fs::read_to_string(&cfg_path).unwrap();
     std::fs::write(
@@ -69,9 +69,9 @@ fn fluxo_completo_init_list_resume_cache_ignore() {
         .success()
         .stdout(predicate::str::contains("feat: login wip"))
         .stdout(predicate::str::contains("## Fontes"))
-        .stderr(predicate::str::contains("confiança baixa")); // sem sessões de IA no fixture
+        .stderr(predicate::str::contains("low confidence")); // no AI sessions in the fixture
 
-    // segunda chamada vem do cache: funciona mesmo com LLM quebrado
+    // second call comes from cache: works even with a broken LLM
     let cfg = std::fs::read_to_string(&cfg_path).unwrap();
     std::fs::write(
         &cfg_path,
@@ -84,7 +84,7 @@ fn fluxo_completo_init_list_resume_cache_ignore() {
         .success()
         .stdout(predicate::str::contains("## Fontes"));
 
-    // ignore remove da lista
+    // ignore removes from the list
     loops(&home)
         .args(["ignore", "meu-app/feat/login"])
         .assert()
@@ -96,44 +96,44 @@ fn fluxo_completo_init_list_resume_cache_ignore() {
 }
 
 #[test]
-fn resume_sem_match_orienta_usuario() {
+fn resume_no_match_guides_user() {
     let tmp = tempfile::tempdir().unwrap();
     let home = tmp.path().join("home");
-    let raiz = tmp.path().join("projetos");
-    std::fs::create_dir_all(&raiz).unwrap();
-    loops(&home).arg("init").arg(&raiz).assert().success();
+    let root = tmp.path().join("projetos");
+    std::fs::create_dir_all(&root).unwrap();
+    loops(&home).arg("init").arg(&root).assert().success();
     loops(&home)
-        .args(["resume", "nao-existe"])
+        .args(["resume", "does-not-exist"])
         .assert()
         .failure()
-        .stderr(predicate::str::contains("nenhum loop bate"));
+        .stderr(predicate::str::contains("no loop matches"));
 }
 
 #[test]
-fn list_e_resume_sem_raizes_orienta_usuario() {
+fn list_and_resume_without_roots_guides_user() {
     let tmp = tempfile::tempdir().unwrap();
     let home = tmp.path().join("home");
-    // sem init: Store::load retorna Config::default com roots vazio
+    // no init: Store::load returns Config::default with empty roots
     loops(&home)
         .assert()
         .failure()
-        .stderr(predicate::str::contains("nenhuma raiz configurada"));
+        .stderr(predicate::str::contains("no roots configured"));
     loops(&home)
-        .args(["resume", "qualquer"])
+        .args(["resume", "anything"])
         .assert()
         .failure()
-        .stderr(predicate::str::contains("nenhuma raiz configurada"));
+        .stderr(predicate::str::contains("no roots configured"));
 }
 
 #[test]
-fn ignore_chave_sem_barra_rejeita_com_mensagem_util() {
+fn ignore_key_without_slash_rejects_with_helpful_message() {
     let tmp = tempfile::tempdir().unwrap();
     let home = tmp.path().join("home");
     loops(&home)
-        .args(["ignore", "semslash"])
+        .args(["ignore", "noslash"])
         .assert()
         .failure()
-        .stderr(predicate::str::contains("formato esperado: repo/branch"));
+        .stderr(predicate::str::contains("expected format: repo/branch"));
 }
 
 #[test]
@@ -168,7 +168,7 @@ fn resume_query_ambigua_lista_candidatos() {
         .args(["resume", "feat"])
         .assert()
         .failure()
-        .stderr(predicate::str::contains("query ambígua"))
+        .stderr(predicate::str::contains("ambiguous query"))
         .stderr(predicate::str::contains("app/feat/login"))
         .stderr(predicate::str::contains("app/feat/signup"));
 }
@@ -189,7 +189,7 @@ fn list_imprime_warnings_de_repos_quebrados() {
     loops(&home)
         .assert()
         .success()
-        .stderr(predicate::str::contains("aviso"));
+        .stderr(predicate::str::contains("warning"));
 }
 
 #[test]

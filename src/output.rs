@@ -1,11 +1,11 @@
-//! Renderização para o terminal: tabela do inventário e idades humanas.
+//! Terminal rendering: loop inventory table and human-readable ages.
 use crate::scanner::OpenLoop;
 use crate::worktrees::{Verdict, Worktree};
 use chrono::{DateTime, Utc};
 use std::collections::HashSet;
 use std::path::PathBuf;
 
-/// Converte a diferença entre `now` e `then` em string legível por humanos.
+/// Converts the difference between `now` and `then` into a human-readable string.
 ///
 /// - `< 60 min` → `"{N}min"`
 /// - `< 48 h`   → `"{N}h"`
@@ -21,13 +21,12 @@ pub fn human_age(now: DateTime<Utc>, then: DateTime<Utc>) -> String {
     }
 }
 
-/// Renderiza uma tabela do inventário de loops abertos ordenada do mais parado
-/// para o mais recente (o critério de atenção é o staleness).
+/// Renders a sorted loop inventory table, most idle first (staleness is the attention criterion).
 ///
-/// Retorna uma mensagem comemorativa quando a lista está vazia.
+/// Returns a celebratory message when the list is empty.
 pub fn render_table(loops: &[OpenLoop], now: DateTime<Utc>) -> String {
     if loops.is_empty() {
-        return "Nenhum loop aberto. Tudo finalizado ou ignorado.\n".into();
+        return "No open loops. All finished or ignored.\n".into();
     }
     let mut sorted: Vec<&OpenLoop> = loops.iter().collect();
     sorted.sort_by_key(|l| l.last_commit);
@@ -39,7 +38,7 @@ pub fn render_table(loops: &[OpenLoop], now: DateTime<Utc>) -> String {
         .max(4);
     let mut out = format!(
         "{:<key_w$}  {:>9}  {:>5}  {:>6}\n",
-        "LOOP", "PARADO HÁ", "AHEAD", "BEHIND"
+        "LOOP", "IDLE", "AHEAD", "BEHIND"
     );
     for l in sorted {
         out.push_str(&format!(
@@ -137,20 +136,20 @@ mod tests {
     use chrono::{Duration, Utc};
     use std::path::PathBuf;
 
-    fn lp(branch: &str, idade_dias: i64) -> OpenLoop {
+    fn lp(branch: &str, idle_days: i64) -> OpenLoop {
         OpenLoop {
             repo_name: "app".into(),
             repo_path: PathBuf::from("/tmp/app"),
             branch: branch.into(),
             head_sha: "abc".into(),
-            last_commit: Utc::now() - Duration::days(idade_dias),
+            last_commit: Utc::now() - Duration::days(idle_days),
             ahead: 1,
             behind: 0,
         }
     }
 
     #[test]
-    fn human_age_minutos_horas_dias() {
+    fn human_age_minutes_hours_days() {
         let now = Utc::now();
         assert_eq!(human_age(now, now - Duration::minutes(5)), "5min");
         assert_eq!(human_age(now, now - Duration::hours(3)), "3h");
@@ -158,7 +157,7 @@ mod tests {
     }
 
     #[test]
-    fn render_table_ordena_mais_parado_primeiro() {
+    fn render_table_sorts_most_idle_first() {
         let t = render_table(&[lp("recente", 1), lp("antiga", 30)], Utc::now());
         let pos_antiga = t.find("antiga").unwrap();
         let pos_recente = t.find("recente").unwrap();
@@ -168,8 +167,8 @@ mod tests {
     }
 
     #[test]
-    fn render_table_vazia_celebra() {
-        assert!(render_table(&[], Utc::now()).contains("Nenhum loop aberto"));
+    fn render_table_empty_celebrates() {
+        assert!(render_table(&[], Utc::now()).contains("No open loops"));
     }
 
     fn wt(branch: &str, merged: bool, dirty: bool, idade_dias: i64) -> Worktree {
@@ -195,14 +194,14 @@ mod tests {
             ],
             Utc::now(),
         );
-        // header ASCII
+        // ASCII header
         assert!(out.contains("WORKTREE"));
         assert!(out.contains("VERDICT"));
-        // deletable aparece antes de cold
+        // deletable appears before cold
         let pos_done = out.find("fix/done").unwrap();
         let pos_cold = out.find("feat/cold").unwrap();
         assert!(pos_done < pos_cold);
-        // bloco de comando para a deletable
+        // command block for the deletable entry
         assert!(out.contains("worktree remove"));
         assert!(out.contains("branch -d fix/done"));
         // ASCII-only

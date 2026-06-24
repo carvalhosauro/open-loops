@@ -1,26 +1,26 @@
-//! Descoberta de repositórios e branches não mergeadas via shell-out ao git.
-//! Decisão de design: shell-out (não git2/gix) — simples e debugável;
-//! o gargalo de performance do produto é o LLM, não o git.
+//! Repository and unmerged-branch discovery via git shell-out.
+//! Design decision: shell-out (not git2/gix) — simple and debuggable;
+//! the product performance bottleneck is the LLM, not git.
 use anyhow::{bail, Context, Result};
 use chrono::{DateTime, Utc};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-/// Executa um subcomando git em `repo` e devolve stdout aparado.
+/// Runs a git subcommand in `repo` and returns trimmed stdout.
 ///
 /// # Errors
 ///
-/// Retorna `Err` se o git não estiver no PATH ou se o comando falhar.
+/// Returns `Err` if git is not in PATH or if the command fails.
 pub(crate) fn git(repo: &Path, args: &[&str]) -> Result<String> {
     let out = Command::new("git")
         .arg("-C")
         .arg(repo)
         .args(args)
         .output()
-        .context("git não encontrado no PATH — instale o git")?;
+        .context("git not found in PATH — install git")?;
     if !out.status.success() {
         bail!(
-            "git {:?} falhou em {}: {}",
+            "git {:?} failed in {}: {}",
             args,
             repo.display(),
             String::from_utf8_lossy(&out.stderr).trim()
@@ -29,11 +29,11 @@ pub(crate) fn git(repo: &Path, args: &[&str]) -> Result<String> {
     Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
 }
 
-/// Branch default: origin/HEAD se existir; senão main; senão master.
+/// Default branch: origin/HEAD if it exists; otherwise main; otherwise master.
 ///
 /// # Errors
 ///
-/// Retorna `Err` se nenhuma branch default for encontrada.
+/// Returns `Err` if no default branch is found.
 pub fn default_branch(repo: &Path) -> Result<String> {
     if let Ok(sym) = git(
         repo,
@@ -54,12 +54,12 @@ pub fn default_branch(repo: &Path) -> Result<String> {
         }
     }
     bail!(
-        "não achei a branch default em {} (esperava origin/HEAD, main ou master)",
+        "couldn't find the default branch in {} (expected origin/HEAD, main or master)",
         repo.display()
     )
 }
 
-/// Um loop aberto: branch não mergeada com commits próprios.
+/// An open loop: an unmerged branch with its own commits.
 #[derive(Debug, Clone)]
 pub struct OpenLoop {
     pub repo_name: String,
@@ -72,7 +72,7 @@ pub struct OpenLoop {
 }
 
 impl OpenLoop {
-    /// Chave canônica usada em resume/ignore: "repo/branch".
+    /// Canonical key used in resume/ignore: "repo/branch".
     pub fn key(&self) -> String {
         format!("{}/{}", self.repo_name, self.branch)
     }
@@ -81,10 +81,10 @@ impl OpenLoop {
 const MAX_DEPTH: usize = 3;
 const SKIP_DIRS: [&str; 2] = ["node_modules", "target"];
 
-/// Varre as raízes até MAX_DEPTH procurando diretórios com .git.
+/// Walks roots up to MAX_DEPTH looking for directories with .git.
 ///
-/// Diretórios ocultos (nome começa com `.`) e os listados em `SKIP_DIRS`
-/// são ignorados.
+/// Hidden directories (name starts with `.`) and those listed in `SKIP_DIRS`
+/// are skipped.
 pub fn find_repos(roots: &[PathBuf]) -> Vec<PathBuf> {
     let mut repos = Vec::new();
     for root in roots {
@@ -116,11 +116,11 @@ fn walk(dir: &Path, depth: usize, repos: &mut Vec<PathBuf>) {
     }
 }
 
-/// Retorna todas as branches não mergeadas (exceto a default) de um repo.
+/// Returns all unmerged branches (except default) in a repo.
 ///
 /// # Errors
 ///
-/// Retorna `Err` se o git falhar ou se a branch default não for encontrada.
+/// Returns `Err` if git fails or if the default branch is not found.
 pub fn open_loops(repo: &Path) -> Result<Vec<OpenLoop>> {
     let default = default_branch(repo)?;
     let merged: std::collections::HashSet<String> = git(
@@ -147,7 +147,7 @@ pub fn open_loops(repo: &Path) -> Result<Vec<OpenLoop>> {
         let mut parts = line.split('\t');
         let (Some(branch), Some(sha), Some(date)) = (parts.next(), parts.next(), parts.next())
         else {
-            eprintln!("aviso: linha inesperada do git for-each-ref ignorada: {line:?}");
+            eprintln!("warning: unexpected line from git for-each-ref ignored: {line:?}");
             continue;
         };
         if branch == default || merged.contains(branch) {
@@ -166,7 +166,7 @@ pub fn open_loops(repo: &Path) -> Result<Vec<OpenLoop>> {
         let behind: u32 = c.next().unwrap_or("0").parse().unwrap_or(0);
         let ahead: u32 = c.next().unwrap_or("0").parse().unwrap_or(0);
         let last_commit = DateTime::parse_from_rfc3339(date)
-            .with_context(|| format!("data inválida vinda do git: {date}"))?
+            .with_context(|| format!("invalid date from git: {date}"))?
             .with_timezone(&Utc);
         result.push(OpenLoop {
             repo_name: repo_name.clone(),
@@ -181,9 +181,9 @@ pub fn open_loops(repo: &Path) -> Result<Vec<OpenLoop>> {
     Ok(result)
 }
 
-/// Varre todos os repos encontrados nas raízes em paralelo.
+/// Scans all repos found under the roots in parallel.
 ///
-/// Falhas em repos individuais viram warnings, nunca abortam a varredura.
+/// Individual repo failures become warnings and never abort the scan.
 pub fn scan(roots: &[PathBuf]) -> (Vec<OpenLoop>, Vec<String>) {
     let repos = find_repos(roots);
     let results: Vec<Result<Vec<OpenLoop>>> = std::thread::scope(|s| {
@@ -195,7 +195,7 @@ pub fn scan(roots: &[PathBuf]) -> (Vec<OpenLoop>, Vec<String>) {
             .into_iter()
             .map(|h| {
                 h.join()
-                    .unwrap_or_else(|_| Err(anyhow::anyhow!("panic ao escanear o repositório")))
+                    .unwrap_or_else(|_| Err(anyhow::anyhow!("panic while scanning repository")))
             })
             .collect()
     });
@@ -210,31 +210,31 @@ pub fn scan(roots: &[PathBuf]) -> (Vec<OpenLoop>, Vec<String>) {
     (all, warnings)
 }
 
-/// Commits exclusivos da branch em relação à default (para o prompt de destilação).
+/// Branch-exclusive commits relative to the default (for the distillation prompt).
 ///
 /// # Errors
 ///
-/// Retorna `Err` se o git falhar.
+/// Returns `Err` if git fails.
 pub fn git_log(repo: &Path, default: &str, branch: &str) -> Result<String> {
     git(repo, &["log", "--oneline", &format!("{default}..{branch}")])
 }
 
-/// Diffstat da branch contra a base (para o prompt de destilação).
+/// Diffstat of the branch against the base (for the distillation prompt).
 ///
 /// # Errors
 ///
-/// Retorna `Err` se o git falhar.
+/// Returns `Err` if git fails.
 pub fn diffstat(repo: &Path, default: &str, branch: &str) -> Result<String> {
     git(repo, &["diff", "--stat", &format!("{default}...{branch}")])
 }
 
-/// Janela temporal dos commits exclusivos da branch.
+/// Time window of the branch-exclusive commits.
 ///
-/// Útil para filtrar sessões de IA muito antigas.
+/// Used to filter out AI sessions that predate the branch work.
 ///
 /// # Errors
 ///
-/// Retorna `Err` se o git falhar ou se não houver commits na branch.
+/// Returns `Err` if git fails or if there are no commits on the branch.
 pub fn commit_window(
     repo: &Path,
     default: &str,
@@ -250,7 +250,7 @@ pub fn commit_window(
         .map(|d| d.with_timezone(&Utc))
         .collect();
     if dates.is_empty() {
-        // branch sem commit próprio: usa o último commit dela
+        // branch has no exclusive commit: fall back to its latest commit
         let head = git(repo, &["log", "-1", "--format=%cI", branch])?;
         dates.push(DateTime::parse_from_rfc3339(head.trim())?.with_timezone(&Utc));
     }
@@ -258,12 +258,12 @@ pub fn commit_window(
         .iter()
         .min()
         .copied()
-        .ok_or_else(|| anyhow::anyhow!("sem datas de commit para {branch}"))?;
+        .ok_or_else(|| anyhow::anyhow!("no commit dates for {branch}"))?;
     let max = dates
         .iter()
         .max()
         .copied()
-        .ok_or_else(|| anyhow::anyhow!("sem datas de commit para {branch}"))?;
+        .ok_or_else(|| anyhow::anyhow!("no commit dates for {branch}"))?;
     Ok((min, max))
 }
 
@@ -273,7 +273,7 @@ mod tests {
     use crate::testutil;
 
     #[test]
-    fn default_branch_detecta_main() {
+    fn default_branch_detects_main() {
         let tmp = tempfile::tempdir().unwrap();
         let repo = tmp.path().join("app");
         testutil::init_repo(&repo);
@@ -281,19 +281,19 @@ mod tests {
     }
 
     #[test]
-    fn git_falha_com_mensagem_contextual() {
+    fn git_fails_with_contextual_message() {
         let tmp = tempfile::tempdir().unwrap();
-        // diretório não é repo git
+        // directory is not a git repo
         let err = git(tmp.path(), &["status"]).unwrap_err();
         assert!(err.to_string().contains(&tmp.path().display().to_string()));
     }
 
     #[test]
-    fn find_repos_acha_repos_ate_profundidade_3_e_pula_ocultos() {
+    fn find_repos_finds_repos_up_to_depth_3_and_skips_hidden() {
         let tmp = tempfile::tempdir().unwrap();
         testutil::init_repo(&tmp.path().join("a/b/repo1"));
         testutil::init_repo(&tmp.path().join("repo2"));
-        testutil::init_repo(&tmp.path().join(".oculto/repo3"));
+        testutil::init_repo(&tmp.path().join(".hidden/repo3"));
         let repos = find_repos(&[tmp.path().to_path_buf()]);
         let names: Vec<_> = repos
             .iter()
@@ -305,12 +305,12 @@ mod tests {
     }
 
     #[test]
-    fn open_loops_acha_nao_mergeada_ignora_mergeada_e_default() {
+    fn open_loops_finds_unmerged_ignores_merged_and_default() {
         let tmp = tempfile::tempdir().unwrap();
         let repo = tmp.path().join("app");
         testutil::init_repo(&repo);
         testutil::add_branch_with_commit(&repo, "feat/x", "x.txt");
-        testutil::git(&repo, &["branch", "mergeada"]); // aponta para main => mergeada
+        testutil::git(&repo, &["branch", "merged"]); // points to main => merged
 
         let loops = open_loops(&repo).unwrap();
         assert_eq!(loops.len(), 1);
@@ -324,25 +324,25 @@ mod tests {
     }
 
     #[test]
-    fn scan_agrega_repos_e_reporta_warning_sem_abortar() {
+    fn scan_aggregates_repos_and_reports_warning_without_aborting() {
         let tmp = tempfile::tempdir().unwrap();
-        let bom = tmp.path().join("bom");
-        testutil::init_repo(&bom);
-        testutil::add_branch_with_commit(&bom, "feat/ok", "ok.txt");
-        // repo quebrado de verdade: repo sem nenhum commit (default_branch falha)
-        let vazio = tmp.path().join("vazio");
-        std::fs::create_dir_all(&vazio).unwrap();
-        testutil::git(&vazio, &["init", "-b", "main"]);
+        let good = tmp.path().join("good");
+        testutil::init_repo(&good);
+        testutil::add_branch_with_commit(&good, "feat/ok", "ok.txt");
+        // truly broken repo: no commits, so default_branch fails
+        let empty = tmp.path().join("empty");
+        std::fs::create_dir_all(&empty).unwrap();
+        testutil::git(&empty, &["init", "-b", "main"]);
 
         let (loops, warnings) = scan(&[tmp.path().to_path_buf()]);
         assert_eq!(loops.len(), 1);
-        assert_eq!(loops[0].key(), "bom/feat/ok");
+        assert_eq!(loops[0].key(), "good/feat/ok");
         assert_eq!(warnings.len(), 1);
-        assert!(warnings[0].contains("vazio"));
+        assert!(warnings[0].contains("empty"));
     }
 
     #[test]
-    fn helpers_de_contexto_retornam_commits_e_janela() {
+    fn context_helpers_return_commits_and_window() {
         let tmp = tempfile::tempdir().unwrap();
         let repo = tmp.path().join("app");
         testutil::init_repo(&repo);
@@ -352,12 +352,12 @@ mod tests {
         assert!(log.contains("wip feat/x"));
         let stat = diffstat(&repo, "main", "feat/x").unwrap();
         assert!(stat.contains("x.txt"));
-        let (ini, fim) = commit_window(&repo, "main", "feat/x").unwrap();
-        assert!(ini <= fim);
+        let (start, end) = commit_window(&repo, "main", "feat/x").unwrap();
+        assert!(start <= end);
     }
 
     #[test]
-    fn default_branch_detecta_master_fallback() {
+    fn default_branch_detects_master_fallback() {
         let tmp = tempfile::tempdir().unwrap();
         let repo = tmp.path();
         testutil::git(repo, &["init", "-b", "master"]);
@@ -368,12 +368,12 @@ mod tests {
     }
 
     #[test]
-    fn default_branch_erro_sem_main_nem_master() {
+    fn default_branch_errors_without_main_or_master() {
         let tmp = tempfile::tempdir().unwrap();
         let repo = tmp.path();
         testutil::git(repo, &["init", "-b", "trunk"]);
-        // sem commits: refs/heads/main e refs/heads/master não existem
+        // no commits: refs/heads/main and refs/heads/master do not exist
         let err = default_branch(repo).unwrap_err();
-        assert!(err.to_string().contains("não achei a branch default"));
+        assert!(err.to_string().contains("couldn't find the default branch"));
     }
 }

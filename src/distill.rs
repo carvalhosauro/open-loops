@@ -1,16 +1,16 @@
-//! Destilação: monta o prompt com as evidências (git + sessões) e chama o
-//! LLM via comando configurável (default "claude -p"). Comando injetável =
-//! testes usam `cat` e usuários podem trocar de LLM sem mudar código.
+//! Distillation: builds the prompt with evidence (git + sessions) and calls the
+//! LLM via a configurable command (default "claude -p"). Injectable command means
+//! tests use `cat` and users can swap LLMs without changing code.
 use crate::scanner::OpenLoop;
 use crate::sessions::SessionExcerpt;
 use anyhow::{bail, Context, Result};
 use std::io::Write;
 use std::process::{Command, Stdio};
 
-/// Monta o prompt de reconstituição de contexto para um loop aberto.
+/// Builds the context-reconstruction prompt for an open loop.
 ///
-/// Inclui branch, commits, diffstat e trechos de sessões de IA.
-/// Quando não há sessões, declara explicitamente "nenhuma encontrada".
+/// Includes branch, commits, diffstat, and AI session excerpts.
+/// When there are no sessions, explicitly declares "nenhuma encontrada".
 pub fn build_prompt(
     lp: &OpenLoop,
     default_branch: &str,
@@ -44,15 +44,15 @@ pub fn build_prompt(
     p
 }
 
-/// Executa o comando LLM com o prompt em stdin e devolve o stdout.
+/// Runs the LLM command with the prompt on stdin and returns stdout.
 ///
-/// O comando é interpretado via `sh -c`, portanto pode conter pipes e
-/// redirecionamentos (ex.: `"claude -p | tee /tmp/saida.md"`).
+/// The command is interpreted via `sh -c`, so it may contain pipes and
+/// redirections (e.g. `"claude -p | tee /tmp/output.md"`).
 ///
 /// # Errors
 ///
-/// Retorna `Err` se o processo não puder ser iniciado ou se encerrar com
-/// status diferente de zero (ex.: LLM não instalado, credencial ausente).
+/// Returns `Err` if the process cannot be started or exits with a non-zero
+/// status (e.g. LLM not installed, missing credential).
 pub fn run_llm(llm_command: &str, prompt: &str) -> Result<String> {
     let mut child = Command::new("sh")
         .arg("-c")
@@ -63,46 +63,47 @@ pub fn run_llm(llm_command: &str, prompt: &str) -> Result<String> {
         .spawn()
         .with_context(|| {
             format!(
-                "falha ao executar o comando LLM `{llm_command}` — \
-                 está instalado? Ajuste llm_command no config.toml"
+                "failed to run the LLM command `{llm_command}` — \
+                 is it installed? Adjust llm_command in config.toml"
             )
         })?;
     child
         .stdin
         .take()
-        .ok_or_else(|| anyhow::anyhow!("stdin não disponível para o processo LLM"))?
+        .ok_or_else(|| anyhow::anyhow!("stdin not available for the LLM process"))?
         .write_all(prompt.as_bytes())
         .or_else(|e| {
+            // broken pipe means the LLM exited before reading all of stdin — that's fine
             if e.kind() == std::io::ErrorKind::BrokenPipe {
                 Ok(())
             } else {
-                Err(e).context("falha ao escrever o prompt no stdin do LLM")
+                Err(e).context("failed to write the prompt to the LLM stdin")
             }
         })?;
     let out = child
         .wait_with_output()
-        .context("falha ao aguardar o processo LLM")?;
+        .context("failed to wait for the LLM process")?;
     if !out.status.success() {
         bail!(
-            "comando LLM falhou (`{llm_command}`): {}",
+            "LLM command failed (`{llm_command}`): {}",
             String::from_utf8_lossy(&out.stderr).trim()
         );
     }
     Ok(String::from_utf8_lossy(&out.stdout).into_owned())
 }
 
-/// Anexa a seção `## Fontes` ao documento gerado pelo LLM.
+/// Appends the `## Fontes` section to the LLM-generated document.
 ///
-/// Permite ao usuário auditar as evidências usadas na reconstituição
-/// (mitigação do risco de alucinação — ver spec §Riscos).
+/// Lets the user audit the evidence used in the reconstruction
+/// (mitigates hallucination risk — see spec §Risks).
 pub fn with_sources(answer: &str, lp: &OpenLoop, excerpts: &[SessionExcerpt]) -> String {
-    let sha_curto = &lp.head_sha[..7.min(lp.head_sha.len())];
+    let short_sha = &lp.head_sha[..7.min(lp.head_sha.len())];
     let mut doc = format!(
         "# {}\n\n{}\n\n## Fontes\n\n- git: branch {} (HEAD {})\n",
         lp.key(),
         answer.trim(),
         lp.branch,
-        sha_curto
+        short_sha
     );
     for e in excerpts {
         doc.push_str(&format!(
@@ -143,7 +144,7 @@ mod tests {
     }
 
     #[test]
-    fn build_prompt_inclui_evidencias_e_secoes() {
+    fn build_prompt_includes_evidence_and_sections() {
         let p = build_prompt(
             &fake_loop(),
             "main",
@@ -159,34 +160,34 @@ mod tests {
     }
 
     #[test]
-    fn build_prompt_sem_sessoes_declara_ausencia() {
+    fn build_prompt_without_sessions_declares_absence() {
         let p = build_prompt(&fake_loop(), "main", "", "", &[]);
         assert!(p.contains("nenhuma encontrada"));
     }
 
     #[test]
-    fn run_llm_passa_prompt_via_stdin() {
-        // `cat` ecoa o stdin: valida o contrato sem LLM real
-        let out = run_llm("cat", "prompt de teste").unwrap();
-        assert_eq!(out.trim(), "prompt de teste");
+    fn run_llm_passes_prompt_via_stdin() {
+        // `cat` echoes stdin: validates the contract without a real LLM
+        let out = run_llm("cat", "test prompt").unwrap();
+        assert_eq!(out.trim(), "test prompt");
     }
 
     #[test]
-    fn run_llm_erro_contextual_quando_comando_falha() {
+    fn run_llm_contextual_error_when_command_fails() {
         let err = run_llm("false", "x").unwrap_err();
-        assert!(err.to_string().contains("comando LLM falhou"));
+        assert!(err.to_string().contains("LLM command failed"));
     }
 
     #[test]
-    fn with_sources_anexa_git_e_sessoes() {
+    fn with_sources_appends_git_and_sessions() {
         let doc = with_sources("## Por quê\nlogin", &fake_loop(), &[fake_excerpt()]);
         assert!(doc.contains("## Fontes"));
-        assert!(doc.contains("abcdef1")); // sha curto
+        assert!(doc.contains("abcdef1")); // short sha
         assert!(doc.contains("sessao1.jsonl"));
     }
 
     #[test]
-    fn with_sources_sha_curto_quando_head_sha_menor_que_7() {
+    fn with_sources_short_sha_when_head_sha_under_7_chars() {
         let lp = OpenLoop {
             repo_name: "app".into(),
             repo_path: PathBuf::from("/tmp/app"),
@@ -198,6 +199,6 @@ mod tests {
         };
         let doc = with_sources("## Por quê\nconteudo", &lp, &[]);
         assert!(doc.contains("ab1"));
-        assert!(!doc.contains("ab1\0")); // sem bytes extras
+        assert!(!doc.contains("ab1\0")); // no extra bytes
     }
 }

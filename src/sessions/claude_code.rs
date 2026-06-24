@@ -1,6 +1,6 @@
-//! Adapter para sessões do Claude Code (~/.claude/projects/<path-encoded>/*.jsonl).
-//! ATENÇÃO: formato interno do Claude Code, não é API pública — pode mudar.
-//! Por isso o parsing é tolerante: linha ruim é pulada, nunca aborta (risco 1 da spec).
+//! Adapter for Claude Code sessions (~/.claude/projects/<path-encoded>/*.jsonl).
+//! WARNING: internal Claude Code format, not a public API — may change.
+//! Parsing is therefore tolerant: a bad line is skipped, never aborts (spec risk 1).
 use super::{SessionExcerpt, SessionSource};
 use anyhow::Result;
 use chrono::{DateTime, Duration, Utc};
@@ -10,14 +10,14 @@ pub struct ClaudeCode {
     pub projects_dir: PathBuf,
 }
 
-/// Claude Code codifica o caminho do projeto substituindo '/' e '.' por '-'.
-/// Ex.: /home/g/repo/x -> -home-g-repo-x
+/// Claude Code encodes the project path by replacing '/' and '.' with '-'.
+/// e.g. /home/g/repo/x -> -home-g-repo-x
 pub fn encode_project_path(p: &Path) -> String {
     p.to_string_lossy().replace(['/', '.'], "-")
 }
 
-/// Extrai o texto de uma linha jsonl de sessão. None para linhas
-/// não-mensagem, corrompidas ou vazias (parsing tolerante).
+/// Extracts text from a session jsonl line. None for non-message,
+/// corrupted, or empty lines (tolerant parsing).
 pub fn extract_text(line: &str) -> Option<String> {
     let v: serde_json::Value = serde_json::from_str(line).ok()?;
     let role = v.get("type")?.as_str()?;
@@ -42,8 +42,8 @@ pub fn extract_text(line: &str) -> Option<String> {
     }
 }
 
-/// Lê os últimos `max_bytes` do arquivo e extrai o texto das mensagens.
-/// O fim da conversa concentra o "onde parei" (decisão da spec).
+/// Reads the last `max_bytes` of the file and extracts message text.
+/// The end of the conversation concentrates the "where I left off" signal (spec decision).
 fn read_tail_text(path: &Path, max_bytes: u64) -> Result<String> {
     let raw = std::fs::read(path)?;
     let start = raw.len().saturating_sub(max_bytes as usize);
@@ -59,11 +59,11 @@ fn read_tail_text(path: &Path, max_bytes: u64) -> Result<String> {
 }
 
 impl SessionSource for ClaudeCode {
-    /// Trechos das sessões mais relevantes para a branch.
+    /// Excerpts of the sessions most relevant to the branch.
     ///
     /// # Errors
     ///
-    /// Retorna erro se não for possível ler o diretório do projeto.
+    /// Returns an error if the project directory cannot be read.
     fn excerpts(
         &self,
         repo_path: &Path,
@@ -90,7 +90,7 @@ impl SessionSource for ClaudeCode {
             };
             let modified: DateTime<Utc> = modified.into();
             let in_window = modified >= start && modified <= end;
-            // heurística da spec: janela temporal OU menção à branch
+            // spec heuristic: in the time window OR mentions the branch
             let relevant = in_window
                 || std::fs::read_to_string(&path)
                     .map(|c| c.contains(branch))
@@ -99,7 +99,7 @@ impl SessionSource for ClaudeCode {
                 candidates.push((modified, path));
             }
         }
-        candidates.sort_by(|a, b| b.0.cmp(&a.0)); // mais recente primeiro
+        candidates.sort_by(|a, b| b.0.cmp(&a.0)); // most recent first
         candidates.truncate(max_sessions);
         let mut out = Vec::new();
         for (modified, path) in candidates {
@@ -129,7 +129,7 @@ mod tests {
     use std::path::Path;
 
     #[test]
-    fn encode_project_path_igual_ao_claude_code() {
+    fn encode_project_path_matches_claude_code_format() {
         assert_eq!(
             encode_project_path(Path::new("/home/g/repo/me/open-loops")),
             "-home-g-repo-me-open-loops"
@@ -141,7 +141,7 @@ mod tests {
     }
 
     #[test]
-    fn extract_text_pega_user_assistant_e_ignora_resto() {
+    fn extract_text_captures_user_assistant_and_ignores_rest() {
         let user = r#"{"type":"user","message":{"content":"quero implementar login"}}"#;
         let asst = r#"{"type":"assistant","message":{"content":[{"type":"text","text":"vou criar feat/login"}]}}"#;
         let meta = r#"{"type":"summary","summary":"x"}"#;
@@ -158,7 +158,7 @@ mod tests {
     }
 
     #[test]
-    fn excerpts_seleciona_por_janela_tolera_lixo_e_limita_quantidade() {
+    fn excerpts_selects_by_window_tolerates_garbage_and_limits_count() {
         let tmp = tempfile::tempdir().unwrap();
         let projects = tmp.path().to_path_buf();
         let repo = Path::new("/home/g/app");
@@ -173,7 +173,7 @@ mod tests {
             ),
         )
         .unwrap();
-        // arquivo de outro formato é ignorado
+        // files of other formats are ignored
         std::fs::write(dir.join("nota.txt"), "nada").unwrap();
 
         let src = ClaudeCode {
@@ -189,7 +189,7 @@ mod tests {
     }
 
     #[test]
-    fn excerpts_vazio_quando_dir_do_projeto_nao_existe() {
+    fn excerpts_empty_when_project_dir_does_not_exist() {
         let tmp = tempfile::tempdir().unwrap();
         let src = ClaudeCode {
             projects_dir: tmp.path().to_path_buf(),
@@ -202,7 +202,7 @@ mod tests {
     }
 
     #[test]
-    fn excerpts_inclui_sessao_fora_janela_se_menciona_branch() {
+    fn excerpts_includes_session_outside_window_if_it_mentions_branch() {
         let tmp = tempfile::tempdir().unwrap();
         let projects = tmp.path().to_path_buf();
         let repo = Path::new("/home/g/app");
@@ -219,7 +219,7 @@ mod tests {
 
         let src = ClaudeCode { projects_dir: projects };
         let now = Utc::now();
-        // janela dois anos atrás — mtime do arquivo é agora (fora da janela)
+        // window two years ago — file mtime is now (outside the window)
         let passado = now - Duration::days(730);
         let window = (passado - Duration::days(1), passado);
         let ex = src.excerpts(repo, "feat/login", window, 3, 50).unwrap();
@@ -228,14 +228,14 @@ mod tests {
     }
 
     #[test]
-    fn excerpts_trunca_arquivo_grande_e_pula_linha_cortada() {
+    fn excerpts_truncates_large_file_and_skips_cut_line() {
         let tmp = tempfile::tempdir().unwrap();
         let projects = tmp.path().to_path_buf();
         let repo = Path::new("/home/g/app");
         let dir = projects.join(encode_project_path(repo));
         std::fs::create_dir_all(&dir).unwrap();
 
-        // padding de linhas summary (não extraídas) para forçar arquivo > 1 KB
+        // padding with summary lines (not extracted) to force file > 1 KB
         let pad_line = format!(
             "{{\"type\":\"summary\",\"x\":\"{}\"}}\n",
             "A".repeat(80)
@@ -252,20 +252,20 @@ mod tests {
         let src = ClaudeCode { projects_dir: projects };
         let now = Utc::now();
         let window = (now - Duration::days(1), now + Duration::days(1));
-        // max_kb=1 força truncamento: start > 0 → primeira linha do tail é pulada
+        // max_kb=1 forces truncation: start > 0 → first line of the tail is skipped
         let ex = src.excerpts(repo, "feat/x", window, 3, 1).unwrap();
         assert_eq!(ex.len(), 1);
         assert!(ex[0].text.contains("contexto final"));
     }
 
     #[test]
-    fn excerpts_pula_sessao_com_apenas_mensagens_sem_texto() {
+    fn excerpts_skips_session_with_only_messages_without_text() {
         let tmp = tempfile::tempdir().unwrap();
         let projects = tmp.path().to_path_buf();
         let repo = Path::new("/home/g/app");
         let dir = projects.join(encode_project_path(repo));
         std::fs::create_dir_all(&dir).unwrap();
-        // apenas linhas summary e tool_result — extract_text retorna None para todas
+        // only summary and tool_result lines — extract_text returns None for all of them
         std::fs::write(
             dir.join("vazia.jsonl"),
             concat!(

@@ -1,4 +1,4 @@
-//! Definição dos comandos e orquestração dos módulos.
+//! Command definitions and module orchestration.
 use crate::config::Store;
 use crate::ignores::Ignores;
 use crate::scanner::{self, OpenLoop};
@@ -12,7 +12,7 @@ use std::path::{Path, PathBuf};
 #[command(
     name = "loops",
     version,
-    about = "Recupere o contexto de trabalhos pausados"
+    about = "Recover the context of paused work"
 )]
 pub struct Cli {
     #[command(subcommand)]
@@ -21,11 +21,11 @@ pub struct Cli {
 
 #[derive(Subcommand)]
 pub enum Command {
-    /// Registra raízes de repositórios (ex.: loops init ~/repo)
+    /// Register repository roots (e.g. loops init ~/repo)
     Init { paths: Vec<PathBuf> },
-    /// Destila o contexto de um loop: por quê, feito, falta, próximo passo
+    /// Distill a loop's context: why, done, remaining, next step
     Resume { query: String },
-    /// Descarta um loop morto da lista (formato repo/branch)
+    /// Drop a dead loop from the list (repo/branch format)
     Ignore { key: String },
     /// List git worktrees with a cleanup verdict (alias: wt)
     #[command(visible_alias = "wt")]
@@ -39,11 +39,11 @@ pub fn run_list(base: &Path) -> Result<()> {
     let cfg = store.load()?;
     ensure!(
         !cfg.roots.is_empty(),
-        "nenhuma raiz configurada. Rode: loops init <dir-com-seus-repos>"
+        "no roots configured. Run: loops init <dir-with-your-repos>"
     );
     let (found, warnings) = scanner::scan(&cfg.roots);
     for w in &warnings {
-        eprintln!("aviso: {w}");
+        eprintln!("warning: {w}");
     }
     let ignores = Ignores::load(base)?;
     let visible: Vec<OpenLoop> = found
@@ -55,25 +55,25 @@ pub fn run_list(base: &Path) -> Result<()> {
 }
 
 pub fn run_init(base: &Path, paths: &[PathBuf]) -> Result<()> {
-    ensure!(!paths.is_empty(), "uso: loops init <dir> [<dir>...]");
+    ensure!(!paths.is_empty(), "usage: loops init <dir> [<dir>...]");
     let store = Store::new(base.to_path_buf());
     let cfg = store.add_roots(paths)?;
-    println!("raízes registradas:");
+    println!("roots registered:");
     for r in &cfg.roots {
         println!("  {}", r.display());
     }
-    println!("\nconfig em {}", store.config_path().display());
+    println!("\nconfig at {}", store.config_path().display());
     Ok(())
 }
 
 pub fn run_ignore(base: &Path, key: &str) -> Result<()> {
     ensure!(
         key.contains('/'),
-        "formato esperado: repo/branch (rode `loops` para ver as chaves)"
+        "expected format: repo/branch (run `loops` to see the keys)"
     );
     let mut ignores = Ignores::load(base)?;
     ignores.add(key)?;
-    println!("ignorado: {key}");
+    println!("ignored: {key}");
     Ok(())
 }
 
@@ -82,23 +82,23 @@ pub fn run_resume(base: &Path, query: &str) -> Result<()> {
     let cfg = store.load()?;
     ensure!(
         !cfg.roots.is_empty(),
-        "nenhuma raiz configurada. Rode: loops init <dir-com-seus-repos>"
+        "no roots configured. Run: loops init <dir-with-your-repos>"
     );
     let (found, warnings) = scanner::scan(&cfg.roots);
     for w in &warnings {
-        eprintln!("aviso: {w}");
+        eprintln!("warning: {w}");
     }
-    // resolução fuzzy: substring case-insensitive sobre a chave repo/branch
+    // fuzzy resolution: case-insensitive substring match on the repo/branch key
     let q = query.to_lowercase();
     let matches: Vec<&OpenLoop> = found
         .iter()
         .filter(|l| l.key().to_lowercase().contains(&q))
         .collect();
     let lp = match matches.len() {
-        0 => bail!("nenhum loop bate com '{query}'. Rode `loops` para ver os abertos."),
+        0 => bail!("no loop matches '{query}'. Run `loops` to see open ones."),
         1 => matches[0],
         _ => bail!(
-            "query ambígua, candidatos:\n{}",
+            "ambiguous query, candidates:\n{}",
             matches
                 .iter()
                 .map(|l| format!("  {}", l.key()))
@@ -128,7 +128,7 @@ pub fn run_resume(base: &Path, query: &str) -> Result<()> {
         cfg.max_session_kb,
     )?;
     if excerpts.is_empty() {
-        eprintln!("aviso: nenhuma sessão de IA encontrada — confiança baixa, contexto só do git");
+        eprintln!("warning: no AI session found — low confidence, context from git only");
     }
     let prompt = distill::build_prompt(lp, &default, &commits, &diffstat, &excerpts);
     let answer = distill::run_llm(&cfg.llm_command, &prompt)?;

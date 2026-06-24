@@ -1,4 +1,4 @@
-//! Helpers de teste: repositórios git temporários.
+//! Test helpers: temporary git repositories.
 use std::path::Path;
 use std::process::Command;
 
@@ -12,16 +12,16 @@ pub fn git(repo: &Path, args: &[&str]) {
         .env("GIT_COMMITTER_NAME", "t")
         .env("GIT_COMMITTER_EMAIL", "t@t")
         .output()
-        .expect("git instalado")
+        .expect("git installed")
         .status;
     assert!(
         status.success(),
-        "git {args:?} falhou em {}",
+        "git {args:?} failed in {}",
         repo.display()
     );
 }
 
-/// Cria repo com branch main e 1 commit.
+/// Creates a repo with a main branch and 1 commit.
 pub fn init_repo(dir: &Path) {
     std::fs::create_dir_all(dir).unwrap();
     git(dir, &["init", "-b", "main"]);
@@ -30,7 +30,7 @@ pub fn init_repo(dir: &Path) {
     git(dir, &["commit", "-m", "init"]);
 }
 
-/// Cria branch a partir do estado atual com 1 commit próprio.
+/// Creates a branch from the current state with 1 exclusive commit.
 pub fn add_branch_with_commit(dir: &Path, branch: &str, file: &str) {
     git(dir, &["checkout", "-b", branch]);
     std::fs::write(dir.join(file), file).unwrap();
