@@ -76,9 +76,117 @@ impl Worktree {
     }
 }
 
+/// Enumerates and classifies a repository's worktrees.
+///
+/// # Errors
+///
+/// Returns `Err` if `git worktree list` fails.
+pub fn worktrees(repo: &Path) -> Result<Vec<Worktree>> {
+    let raw = git(repo, &["worktree", "list", "--porcelain"])?;
+    let default = default_branch(repo).ok();
+    let merged_set: HashSet<String> = match &default {
+        Some(d) => git(repo, &["branch", "--merged", d, "--format=%(refname:short)"])
+            .unwrap_or_default()
+            .lines()
+            .map(|s| s.trim().to_string())
+            .collect(),
+        None => HashSet::new(),
+    };
+    let repo_name = repo
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| repo.display().to_string());
+
+    let mut out = Vec::new();
+    let mut first = true;
+    for block in raw.split("\n\n") {
+        let block = block.trim();
+        if block.is_empty() {
+            continue;
+        }
+        let mut wt_path: Option<PathBuf> = None;
+        let mut branch: Option<String> = None;
+        let mut prunable = false;
+        let mut bare = false;
+        for line in block.lines() {
+            if let Some(p) = line.strip_prefix("worktree ") {
+                wt_path = Some(PathBuf::from(p));
+            } else if let Some(b) = line.strip_prefix("branch ") {
+                branch = Some(b.strip_prefix("refs/heads/").unwrap_or(b).to_string());
+            } else if line == "bare" {
+                bare = true;
+            } else if line == "prunable" || line.starts_with("prunable ") {
+                prunable = true;
+            }
+            // "detached" => branch stays None
+        }
+        let Some(wt_path) = wt_path else { continue };
+        if bare {
+            continue;
+        }
+        let is_main = first;
+        first = false;
+
+        let (last_commit, dirty) = if prunable {
+            (None, false)
+        } else {
+            let lc = git(&wt_path, &["log", "-1", "--format=%cI"])
+                .ok()
+                .and_then(|s| DateTime::parse_from_rfc3339(s.trim()).ok())
+                .map(|d| d.with_timezone(&Utc));
+            let status = git(&wt_path, &["status", "--porcelain"]).unwrap_or_default();
+            (lc, !status.trim().is_empty())
+        };
+        let merged = branch
+            .as_ref()
+            .map(|b| merged_set.contains(b))
+            .unwrap_or(false);
+
+        out.push(Worktree {
+            repo_name: repo_name.clone(),
+            repo_path: repo.to_path_buf(),
+            worktree_path: wt_path,
+            branch,
+            last_commit,
+            merged,
+            dirty,
+            prunable,
+            is_main,
+        });
+    }
+    Ok(out)
+}
+
+/// Scans worktrees of all repos found under the roots, in parallel.
+///
+/// Per-repo failures become warnings, never abort.
+pub fn scan_worktrees(roots: &[PathBuf]) -> (Vec<Worktree>, Vec<String>) {
+    let repos = find_repos(roots);
+    let results: Vec<Result<Vec<Worktree>>> = std::thread::scope(|s| {
+        let handles: Vec<_> = repos.iter().map(|r| s.spawn(move || worktrees(r))).collect();
+        handles
+            .into_iter()
+            .map(|h| {
+                h.join()
+                    .unwrap_or_else(|_| Err(anyhow::anyhow!("panic while scanning worktrees")))
+            })
+            .collect()
+    });
+    let mut all = Vec::new();
+    let mut warnings = Vec::new();
+    for (repo, res) in repos.iter().zip(results) {
+        match res {
+            Ok(mut w) => all.append(&mut w),
+            Err(e) => warnings.push(format!("{}: {e:#}", repo.display())),
+        }
+    }
+    (all, warnings)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::testutil;
 
     fn wt(branch: Option<&str>, merged: bool, dirty: bool, prunable: bool, is_main: bool) -> Worktree {
         Worktree {
@@ -111,5 +219,55 @@ mod tests {
     fn short_name_uses_basename() {
         let w = wt(Some("x"), false, false, false, false);
         assert_eq!(w.short_name(), "app/x");
+    }
+
+    #[test]
+    fn worktrees_classifies_deletable_cold_and_dirty() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path().join("app");
+        testutil::init_repo(&repo);
+
+        // deletable: new branch off main (merged), clean worktree
+        let del = tmp.path().join("wt-del");
+        testutil::add_worktree(&repo, &del, "feat/done");
+
+        // cold: branch with its own commit (unmerged), clean worktree
+        let cold = tmp.path().join("wt-cold");
+        testutil::add_worktree(&repo, &cold, "feat/cold");
+        std::fs::write(cold.join("c.txt"), "c").unwrap();
+        testutil::git(&cold, &["add", "."]);
+        testutil::git(&cold, &["commit", "-m", "wip cold"]);
+
+        // active (dirty): new branch off main with an uncommitted file
+        let dirty = tmp.path().join("wt-dirty");
+        testutil::add_worktree(&repo, &dirty, "feat/dirty");
+        std::fs::write(dirty.join("d.txt"), "d").unwrap();
+
+        let all = worktrees(&repo).unwrap();
+        let by_branch = |b: &str| {
+            all.iter()
+                .find(|w| w.branch.as_deref() == Some(b))
+                .unwrap_or_else(|| panic!("branch {b} missing"))
+        };
+        assert_eq!(by_branch("feat/done").verdict(), Verdict::Deletable);
+        assert_eq!(by_branch("feat/cold").verdict(), Verdict::Cold);
+        assert_eq!(by_branch("feat/dirty").verdict(), Verdict::Active);
+
+        // main becomes home
+        let main = all.iter().find(|w| w.is_main).expect("main worktree");
+        assert_eq!(main.verdict(), Verdict::Home);
+    }
+
+    #[test]
+    fn scan_worktrees_aggregates_and_does_not_abort() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path().join("app");
+        testutil::init_repo(&repo);
+        let extra = tmp.path().join("wt-extra");
+        testutil::add_worktree(&repo, &extra, "feat/extra");
+
+        let (all, warnings) = scan_worktrees(&[tmp.path().to_path_buf()]);
+        assert!(all.iter().any(|w| w.branch.as_deref() == Some("feat/extra")));
+        assert!(warnings.is_empty());
     }
 }
