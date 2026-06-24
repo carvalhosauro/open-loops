@@ -204,6 +204,118 @@ fn completions_generates_script_for_shell() {
         .stdout(predicate::str::contains("loops"));
 }
 
+/// Builds a git repo at `repo` (main + 1 commit) and returns its path ready for worktrees.
+fn init_repo(repo: &std::path::Path) {
+    std::fs::create_dir_all(repo).unwrap();
+    git(repo, &["init", "-b", "main"]);
+    std::fs::write(repo.join("a.txt"), "a").unwrap();
+    git(repo, &["add", "."]);
+    git(repo, &["commit", "-m", "init"]);
+}
+
+#[test]
+fn worktrees_aggregates_across_multiple_repos() {
+    let tmp = tempfile::tempdir().unwrap();
+    let home = tmp.path().join("home");
+    let root = tmp.path().join("projetos");
+    for (i, name) in ["app-a", "app-b"].iter().enumerate() {
+        let repo = root.join(name);
+        init_repo(&repo);
+        let wt = tmp.path().join(format!("wt-{i}"));
+        git(&repo, &["worktree", "add", wt.to_str().unwrap(), "-b", "fix/done"]);
+    }
+    loops(&home).arg("init").arg(&root).assert().success();
+
+    loops(&home)
+        .arg("worktrees")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("app-a/wt-0"))
+        .stdout(predicate::str::contains("app-b/wt-1"))
+        // one cleanup command per deletable worktree
+        .stdout(predicate::str::contains("2 worktree(s) to clean up"));
+}
+
+#[test]
+fn worktrees_never_suggests_removing_unmerged_or_dirty() {
+    let tmp = tempfile::tempdir().unwrap();
+    let home = tmp.path().join("home");
+    let root = tmp.path().join("projetos");
+    let repo = root.join("app");
+    init_repo(&repo);
+
+    // cold: unmerged branch with its own commit, clean
+    let cold = tmp.path().join("wt-cold");
+    git(&repo, &["worktree", "add", cold.to_str().unwrap(), "-b", "feat/cold"]);
+    std::fs::write(cold.join("c.txt"), "c").unwrap();
+    git(&cold, &["add", "."]);
+    git(&cold, &["commit", "-m", "wip"]);
+
+    // dirty: branch off main with an uncommitted file
+    let dirty = tmp.path().join("wt-dirty");
+    git(&repo, &["worktree", "add", dirty.to_str().unwrap(), "-b", "feat/dirty"]);
+    std::fs::write(dirty.join("d.txt"), "d").unwrap();
+
+    loops(&home).arg("init").arg(&root).assert().success();
+
+    loops(&home)
+        .arg("worktrees")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("cold"))
+        .stdout(predicate::str::contains("active"))
+        // safety: no destructive command suggested for live/unmerged work
+        .stdout(predicate::str::contains("nothing to clean up"))
+        .stdout(predicate::str::contains("worktree remove").not());
+}
+
+#[test]
+fn worktrees_output_is_ascii() {
+    let tmp = tempfile::tempdir().unwrap();
+    let home = tmp.path().join("home");
+    let root = tmp.path().join("projetos");
+    let repo = root.join("app");
+    init_repo(&repo);
+    let wt = tmp.path().join("wt");
+    git(&repo, &["worktree", "add", wt.to_str().unwrap(), "-b", "fix/done"]);
+    loops(&home).arg("init").arg(&root).assert().success();
+
+    let out = loops(&home).arg("worktrees").assert().success().get_output().stdout.clone();
+    assert!(out.is_ascii(), "worktrees output must be ASCII-only");
+}
+
+#[test]
+fn worktrees_clean_environment_has_no_false_positive() {
+    let tmp = tempfile::tempdir().unwrap();
+    let home = tmp.path().join("home");
+    let root = tmp.path().join("projetos");
+    let repo = root.join("app");
+    init_repo(&repo); // only the main worktree
+    loops(&home).arg("init").arg(&root).assert().success();
+
+    loops(&home)
+        .arg("worktrees")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("home"))
+        .stdout(predicate::str::contains("nothing to clean up"))
+        .stdout(predicate::str::contains("worktree remove").not());
+}
+
+#[test]
+fn completions_for_zsh_and_fish_are_nonempty() {
+    let tmp = tempfile::tempdir().unwrap();
+    let home = tmp.path().join("home");
+    for shell in ["zsh", "fish"] {
+        loops(&home)
+            .arg("completions")
+            .arg(shell)
+            .assert()
+            .success()
+            .stdout(predicate::str::contains("loops"));
+    }
+}
+
 #[test]
 fn worktrees_lists_and_suggests_cleanup() {
     let tmp = tempfile::tempdir().unwrap();
