@@ -37,3 +37,23 @@ just changelog                      # atualiza CHANGELOG.md
 git add CHANGELOG.md && git commit -m "docs: update changelog"
 git tag v0.1.0 && git push --tags   # CI builda binários + installers + release notes
 ```
+
+## Cursor Cloud specific instructions
+
+Ambiente: a toolchain Rust (1.89, pinada em `rust-toolchain.toml`) é instalada
+automaticamente pelo `rustup` ao rodar qualquer `cargo` dentro de `/workspace`.
+Fora de `/workspace` o `rustc` cai na toolchain padrão (ex.: 1.83) — sempre rode
+os comandos a partir da raiz do repo.
+
+- Lint/test/build padrão: `cargo clippy --all-targets -- -D warnings`,
+  `cargo test`, `cargo build` (ou `just lint` / `just test`). O `just` já está
+  instalado em `~/.local/bin`; os alvos só encapsulam os comandos `cargo` acima.
+- `just setup` NÃO funciona aqui: exige `lefthook`, que não está instalado (os
+  git hooks não são necessários para agentes). Rode `cargo`/`just` direto.
+- `cargo fmt --check` falha por uma divergência de formatação pré-existente em
+  testes de `src/sessions/claude_code.rs` (skew da versão do rustfmt) — não foi
+  introduzida por mudanças suas; não "conserte" isso a menos que peçam.
+- Testar `loops resume` sem um LLM real: defina `llm_command = "cat"` no
+  `config.toml` (cat ecoa o prompt, como os testes) e use a env var
+  `OPEN_LOOPS_HOME` para isolar estado (config/cache/ignores) fora de
+  `~/.open-loops`. `loops init <dir>` registra as raízes varridas.
