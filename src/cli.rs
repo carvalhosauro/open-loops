@@ -2,7 +2,7 @@
 use crate::config::Store;
 use crate::ignores::Ignores;
 use crate::scanner::{self, OpenLoop};
-use crate::{cache, distill, output, sessions};
+use crate::{cache, distill, output, sessions, worktrees};
 use anyhow::{bail, ensure, Result};
 use clap::{Parser, Subcommand};
 use sessions::SessionSource;
@@ -27,6 +27,9 @@ pub enum Command {
     Resume { query: String },
     /// Descarta um loop morto da lista (formato repo/branch)
     Ignore { key: String },
+    /// List git worktrees with a cleanup verdict (alias: wt)
+    #[command(visible_alias = "wt")]
+    Worktrees,
     /// Generate a shell completion script (bash, zsh, fish, ...)
     Completions { shell: clap_complete::Shell },
 }
@@ -139,5 +142,20 @@ pub fn run_completions(shell: clap_complete::Shell) -> Result<()> {
     use clap::CommandFactory;
     let mut cmd = Cli::command();
     clap_complete::generate(shell, &mut cmd, "loops", &mut std::io::stdout());
+    Ok(())
+}
+
+pub fn run_worktrees(base: &Path) -> Result<()> {
+    let store = Store::new(base.to_path_buf());
+    let cfg = store.load()?;
+    ensure!(
+        !cfg.roots.is_empty(),
+        "no roots configured. Run: loops init <dir-with-your-repos>"
+    );
+    let (wts, warnings) = worktrees::scan_worktrees(&cfg.roots);
+    for w in &warnings {
+        eprintln!("warning: {w}");
+    }
+    print!("{}", output::render_worktrees(&wts, chrono::Utc::now()));
     Ok(())
 }

@@ -203,3 +203,31 @@ fn completions_generates_script_for_shell() {
         .success()
         .stdout(predicate::str::contains("loops"));
 }
+
+#[test]
+fn worktrees_lists_and_suggests_cleanup() {
+    let tmp = tempfile::tempdir().unwrap();
+    let home = tmp.path().join("home");
+    let root = tmp.path().join("projetos");
+    let repo = root.join("meu-app");
+    std::fs::create_dir_all(&repo).unwrap();
+    git(&repo, &["init", "-b", "main"]);
+    std::fs::write(repo.join("a.txt"), "a").unwrap();
+    git(&repo, &["add", "."]);
+    git(&repo, &["commit", "-m", "init"]);
+    // worktree mergeada (branch nova off main) e limpa => deletable
+    let wt = tmp.path().join("wt-done");
+    git(&repo, &["worktree", "add", wt.to_str().unwrap(), "-b", "fix/done"]);
+
+    loops(&home).arg("init").arg(&root).assert().success();
+
+    loops(&home)
+        .arg("worktrees")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("deletable"))
+        .stdout(predicate::str::contains("worktree remove"));
+
+    // alias wt funciona
+    loops(&home).arg("wt").assert().success();
+}
