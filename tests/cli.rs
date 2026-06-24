@@ -191,3 +191,15 @@ fn list_imprime_warnings_de_repos_quebrados() {
         .success()
         .stderr(predicate::str::contains("aviso"));
 }
+
+#[test]
+fn completions_generates_script_for_shell() {
+    let tmp = tempfile::tempdir().unwrap();
+    let home = tmp.path().join("home");
+    loops(&home)
+        .arg("completions")
+        .arg("bash")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("loops"));
+}

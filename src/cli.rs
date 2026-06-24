@@ -27,6 +27,8 @@ pub enum Command {
     Resume { query: String },
     /// Descarta um loop morto da lista (formato repo/branch)
     Ignore { key: String },
+    /// Generate a shell completion script (bash, zsh, fish, ...)
+    Completions { shell: clap_complete::Shell },
 }
 
 pub fn run_list(base: &Path) -> Result<()> {
@@ -130,5 +132,12 @@ pub fn run_resume(base: &Path, query: &str) -> Result<()> {
     let doc = distill::with_sources(&answer, lp, &excerpts);
     cache.put(lp, &doc)?;
     println!("{doc}");
+    Ok(())
+}
+
+pub fn run_completions(shell: clap_complete::Shell) -> Result<()> {
+    use clap::CommandFactory;
+    let mut cmd = Cli::command();
+    clap_complete::generate(shell, &mut cmd, "loops", &mut std::io::stdout());
     Ok(())
 }

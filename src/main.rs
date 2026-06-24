@@ -10,6 +10,7 @@ fn main() {
         Some(Command::Init { paths }) => cli::run_init(&base, &paths),
         Some(Command::Resume { query }) => cli::run_resume(&base, &query),
         Some(Command::Ignore { key }) => cli::run_ignore(&base, &key),
+        Some(Command::Completions { shell }) => cli::run_completions(shell),
     };
     if let Err(e) = result {
         eprintln!("erro: {e:#}");
