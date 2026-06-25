@@ -1,4 +1,41 @@
 # Changelog
+## [Unreleased]
+
+## [1.0.0] - 2026-06-25
+
+Query engine phase 1 — filter the inventory and resume by structured queries.
+
+### Highlights
+- `loops <query>` — filter inventory by bare terms and attributes (`repo:`, `branch:`, `key:`, `root:`, `idle:`, `ahead:`, `behind:`).
+- `loops resume <query>` — same query language for resumption; `+ignored` / `-ignored` tags.
+- Root aliases in config with collision-checked labels; canonical loop keys are now three segments (`root_label/repo/branch`).
+- Distill cache keyed by `root_label` to avoid name collisions across roots.
+
+### Breaking
+- Loop keys and cache entries use the 3-segment canonical form; existing `~/.open-loops/` state may need a one-time migration (see `docs/configuration.md`).
+
+### Docs
+- ADR 0003 sharpened for query engine, inventory cache, and canonical key.
+- `docs/features.md` and `docs/configuration.md` document query filtering and root aliases.
+
+## [0.1.0] - 2026-06-24
+
+First public release.
+
+### Highlights
+- `loops` — cross-repo inventory of unmerged branches, sorted by idle time (<5s).
+- `loops resume` — distills why / done / remaining / next step from git + AI sessions.
+- `loops resume --dry-run` — audit matched commits and sessions before calling the LLM.
+- Confidence score on every resume (`high` / `medium` / `low`) plus auditable `## Sources`.
+- `loops worktrees` (alias `wt`) — worktree inventory with cleanup verdicts.
+- `loops completions <shell>` — shell completion scripts.
+- Install via GitHub Releases (cargo-dist), install.sh, Homebrew tap, and `cargo install`.
+- All CLI output, error messages, comments, test names, and user docs in English.
+
+### Docs
+- README quickstart with real resume output example and demo script.
+- Fix repository/homepage URLs in `Cargo.toml` (`carvalhosauro/open-loops`).
+
 ## unreleased
 
 ### Docs

@@ -38,3 +38,11 @@ just changelog                      # atualiza CHANGELOG.md
 git add CHANGELOG.md && git commit -m "docs: update changelog"
 git tag v0.1.0 && git push --tags   # CI builda binários + installers + release notes
 ```
+
+## Cursor Cloud specific instructions
+
+- Toolchain Rust 1.89 é selecionado automaticamente via `rust-toolchain.toml`; só `rustc`/`cargo` + `git` são requisitos obrigatórios. Build/lint/test/run usam `cargo` diretamente (ver `justfile`).
+- `just`, `lefthook`, `cargo-llvm-cov` e `git-cliff` NÃO ficam instalados por padrão. Rode os comandos do `justfile` via `cargo` (ex.: `cargo test`, `cargo clippy --all-targets -- -D warnings`, `cargo fmt`) ou instale as ferramentas sob demanda.
+- A suíte `tests/cli.rs` cria repositórios git reais em tempdir e leva ~30s; tudo passa offline, sem serviços externos.
+- `loops resume` (sem `--dry-run`) executa `llm_command` (default `claude -p`, que não existe aqui). Para exercitar o pipeline de distill sem um LLM real, aponte `llm_command` no config para um comando stdin→stdout, ex. `cat` ou `sed 's/^/LLM> /'`. `loops`, `loops resume --dry-run`, `loops worktrees` e `loops completions` funcionam sem LLM.
+- Estado fica em `~/.open-loops/` (ou `OPEN_LOOPS_HOME`); use um tempdir como `OPEN_LOOPS_HOME` para experimentos sem poluir o ambiente.
