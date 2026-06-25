@@ -18,7 +18,7 @@ cargo install open-loops
 # via script (Linux/macOS)
 curl -fsSL https://github.com/carvalhosauro/open-loops/releases/latest/download/open-loops-installer.sh | sh
 
-# via Homebrew (after v0.1.0 release)
+# via Homebrew (requires carvalhosauro/homebrew-tap — see docs/distribution.md)
 brew install carvalhosauro/tap/open-loops
 ```
 
