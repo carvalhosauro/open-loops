@@ -12,6 +12,20 @@ Unmerged branches across all repos under the configured roots, sorted from
 most idle to most recent. Progress on stderr: `scanning git repositories…`.
 No LLM — always fast.
 
+### Filtering
+
+```bash
+loops api                 # repos/branches matching "api"
+loops api idle:>7d        # plus idle more than 7 days
+loops repo:api branch:fix/ behind:>0
+loops +ignored            # include dismissed loops
+```
+
+Bare terms substring-match the repo, branch, or key (AND across terms).
+Attributes: `repo:`, `branch:`, `key:`, `root:` (substring), `idle:` (needs a
+comparator, e.g. `idle:>7d`; units m/h/d/w), `ahead:`/`behind:` (`>`,`<`,`>=`,
+`<=`, or bare equality). Tags: `-ignored` (default), `+ignored`.
+
 ## `loops resume <query>` — context resumption
 
 ```bash
