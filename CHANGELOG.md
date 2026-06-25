@@ -1,47 +1,50 @@
 # Changelog
-## [Unreleased]
-
-## [1.0.0] - 2026-06-25
-
-Query engine phase 1 — filter the inventory and resume by structured queries.
-
-### Highlights
-- `loops <query>` — filter inventory by bare terms and attributes (`repo:`, `branch:`, `key:`, `root:`, `idle:`, `ahead:`, `behind:`).
-- `loops resume <query>` — same query language for resumption; `+ignored` / `-ignored` tags.
-- Root aliases in config with collision-checked labels; canonical loop keys are now three segments (`root_label/repo/branch`).
-- Distill cache keyed by `root_label` to avoid name collisions across roots.
-
-### Breaking
-- Loop keys and cache entries use the 3-segment canonical form; existing `~/.open-loops/` state may need a one-time migration (see `docs/configuration.md`).
-
-### Docs
-- ADR 0003 sharpened for query engine, inventory cache, and canonical key.
-- `docs/features.md` and `docs/configuration.md` document query filtering and root aliases.
-
-## [0.1.0] - 2026-06-24
-
-First public release.
-
-### Highlights
-- `loops` — cross-repo inventory of unmerged branches, sorted by idle time (<5s).
-- `loops resume` — distills why / done / remaining / next step from git + AI sessions.
-- `loops resume --dry-run` — audit matched commits and sessions before calling the LLM.
-- Confidence score on every resume (`high` / `medium` / `low`) plus auditable `## Sources`.
-- `loops worktrees` (alias `wt`) — worktree inventory with cleanup verdicts.
-- `loops completions <shell>` — shell completion scripts.
-- Install via GitHub Releases (cargo-dist), install.sh, Homebrew tap, and `cargo install`.
-- All CLI output, error messages, comments, test names, and user docs in English.
-
-### Docs
-- README quickstart with real resume output example and demo script.
-- Fix repository/homepage URLs in `Cargo.toml` (`carvalhosauro/open-loops`).
-
 ## unreleased
+
+### Docs
+- Add Cursor Cloud setup notes to AGENTS.md
+- Add implementation plan for scanner bare+worktree discovery (Fase A)
+- Add ADR 0005 for git-based repo discovery
+
+### Features
+- Derive repo_name from git common-dir
+- Resolve git common-dir via rev-parse
+- Detect repos via .git file and bare probe
+- Deduplicate repo candidates by git common-dir
+- Add configurable scan_depth (default 4)
+- Name repos from git common-dir in open_loops
+- Pass scan_depth through scan and merge discovery warnings
+- Thread scan_depth from config through scan and worktrees
+
+### Internals
+- Update CHANGELOG and add roadmap and specifications
+- Bump version to 1.0.0 for v1.0.0 tag
+- Add bare and bare+worktree git fixtures
+- Cover bare, worktree, and normal discovery
+- List loops in bare+worktree layout
+## v1.0.0 - 2026-06-25
 
 ### Docs
 - Rewrite README with progress lines and audit flow
 - Add ADR 0003 for query engine and inventory cache
+- Add Phase 2 evidence snapshot and retention policy
+- Sharpen query engine cache model and canonical key
+- Add query engine phase 1 implementation plan
+- Document loops query filtering and root aliases
+- Clarify split_cmp expect invariants
+- Document the breaking 3-segment key migration
 
+### Features
+- Add ScanPlan, AttrFilter, Candidate types
+- Parse bare terms and substring attributes
+- Parse idle/ahead/behind comparators and durations
+- Handle ignored tags, reserve contexts/reports/stale
+- Evaluate ScanPlan against candidate loops
+- Add root aliases and collision-checked label resolution
+- Add root_label and 3-segment canonical key
+- Key distill cache by root_label to avoid name collisions
+- Filter the inventory by query
+- Resolve loops via the query parser, resume includes ignored
 ## v0.1.0 - 2026-06-24
 
 ### Docs

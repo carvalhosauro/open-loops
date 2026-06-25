@@ -38,24 +38,24 @@ Track fino das fases pendentes. Ordem = sequência de execução recomendada
 - [x] superfície clap `loops [query]`
 - [x] migração documentada (`docs/configuration.md`, CHANGELOG)
 
-### ⬜ Spec Fase A — descoberta bare + worktree  ·  [Spec A](docs/superpowers/specs/2026-06-25-scanner-bare-worktree-discovery.md)
+### ✅ Spec Fase A — descoberta bare + worktree  ·  [Spec A](docs/superpowers/specs/2026-06-25-scanner-bare-worktree-discovery.md)
 
 **Próximo bloqueador.** Depende de: —
 
-- [ ] `walk`: detectar `.git` arquivo **ou** diretório (`exists()` no lugar de `is_dir()`)
-- [ ] `walk`: detectar bare por probe estrutural (`HEAD` + `objects/` + `refs/`)
-- [ ] `git_common_dir(path)` via `rev-parse --path-format=absolute --git-common-dir`
-- [ ] dedup por common-dir em `find_repos`/`scan` (N worktrees → 1 repo)
-- [ ] `repo_name_from_common_dir` (função pura, regra `.git`/`.bare`/`foo.git`)
-- [ ] `scan_depth: usize` em `Config` (default 4), substitui `MAX_DEPTH` fixo
-- [ ] `cli.rs` passa `cfg.scan_depth` adiante
-- [ ] ADR 0005 — descoberta por interrogação ao git
-- [ ] `docs/features.md` + `docs/configuration.md`: descoberta e `scan_depth`
-- [ ] `testutil`: helpers `init_bare_repo` / `add_worktree`
-- [ ] testes: normal, ponteiro `.git`, bare puro, dedup, tabela de nomes, `open_loops` em bare, `scan_depth`, `tests/cli.rs`
-- [ ] validação manual: `loops` lista branches em `~/repo/pigz`
-- [ ] `just lint` + `just fmt` limpos; cobertura no gate
-- [ ] CHANGELOG atualizado
+- [x] `walk`: detectar `.git` arquivo **ou** diretório (`exists()` no lugar de `is_dir()`)
+- [x] `walk`: detectar bare por probe estrutural (`HEAD` + `objects/` + `refs/`)
+- [x] `git_common_dir(path)` via `rev-parse --path-format=absolute --git-common-dir`
+- [x] dedup por common-dir em `find_repos`/`scan` (N worktrees → 1 repo)
+- [x] `repo_name_from_common_dir` (função pura, regra `.git`/`.bare`/`foo.git`)
+- [x] `scan_depth: usize` em `Config` (default 4), substitui `MAX_DEPTH` fixo
+- [x] `cli.rs` passa `cfg.scan_depth` adiante
+- [x] ADR 0005 — descoberta por interrogação ao git
+- [x] `docs/features.md` + `docs/configuration.md`: descoberta e `scan_depth`
+- [x] `testutil`: helpers `init_bare_repo` / `add_worktree`
+- [x] testes: normal, ponteiro `.git`, bare puro, dedup, tabela de nomes, `open_loops` em bare, `scan_depth`, `tests/cli.rs`
+- [x] validação manual: `loops` lista branches em `~/repo/pigz`
+- [x] `just lint` + `just fmt` limpos; cobertura no gate
+- [x] CHANGELOG atualizado
 
 ### ⬜ Spec Fase B — atribuição de sessão por worktree  ·  [Spec B](docs/superpowers/specs/2026-06-25-worktree-session-attribution.md)
 
