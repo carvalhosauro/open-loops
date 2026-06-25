@@ -15,10 +15,10 @@ lint:
 fmt:
     cargo fmt
 
-# requer: cargo install cargo-llvm-cov
+# require: cargo install cargo-llvm-cov
 cov:
     cargo llvm-cov --fail-under-lines 70
 
-# requer: cargo install git-cliff
+# require: cargo install git-cliff
 changelog:
     git cliff -o CHANGELOG.md

@@ -1,25 +1,11 @@
 # Changelog
-## [Unreleased]
-
-## [0.1.0] - 2026-06-24
-
-First public release.
-
-### Highlights
-- `loops` — cross-repo inventory of unmerged branches, sorted by idle time (<5s).
-- `loops resume` — distills why / done / remaining / next step from git + AI sessions.
-- `loops resume --dry-run` — audit matched commits and sessions before calling the LLM.
-- Confidence score on every resume (`high` / `medium` / `low`) plus auditable `## Sources`.
-- `loops worktrees` (alias `wt`) — worktree inventory with cleanup verdicts.
-- `loops completions <shell>` — shell completion scripts.
-- Install via GitHub Releases (cargo-dist), install.sh, Homebrew tap, and `cargo install`.
-- All CLI output, error messages, comments, test names, and user docs in English.
+## unreleased
 
 ### Docs
-- README quickstart with real resume output example and demo script.
-- Fix repository/homepage URLs in `Cargo.toml` (`carvalhosauro/open-loops`).
+- Rewrite README with progress lines and audit flow
+- Add ADR 0003 for query engine and inventory cache
 
-## unreleased
+## v0.1.0 - 2026-06-24
 
 ### Docs
 - Add open-loops MVP design spec
@@ -36,6 +22,7 @@ First public release.
 - Implementation plan for worktree inventory + EN migration
 - English test names in worktree plan
 - English/minimal comments rule and quality flow tests in plan
+- English docs, worktrees + completions, error-language rule
 
 ### Features
 - Add config store with toml persistence
@@ -52,6 +39,7 @@ First public release.
 - Enumerate and classify repo worktrees
 - Render worktree inventory table with cleanup commands
 - Add worktrees command (alias wt)
+- Add resume dry-run, confidence score, and v0.1.0 release prep
 
 ### Fixes
 - Update repository links in documentation to reflect new ownership
@@ -74,3 +62,5 @@ First public release.
 - English test strings in claude_code session tests
 - Produce resume output in English
 - Add quality-focused worktree and completion flow tests
+- English comment in session tail reader
+- English test names and comments in tests/cli.rs
