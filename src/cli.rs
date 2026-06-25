@@ -59,15 +59,31 @@ fn resolve_loop(base: &Path, query: &str) -> Result<OpenLoop> {
         !cfg.roots.is_empty(),
         "no roots configured. Run: loops init <dir-with-your-repos>"
     );
+    let mut plan = crate::query::parse(query)?;
+    plan.include_ignored = true; // resume can target an ignored loop by key
     let labels = cfg.resolve_labels()?;
     let (found, warnings) = scanner::scan(&cfg.roots, &labels);
     for w in &warnings {
         eprintln!("warning: {w}");
     }
-    let q = query.to_lowercase();
+    let now = chrono::Utc::now();
     let matches: Vec<&OpenLoop> = found
         .iter()
-        .filter(|l| l.key().to_lowercase().contains(&q))
+        .filter(|l| {
+            let key = l.key();
+            plan.matches(
+                &crate::query::Candidate {
+                    repo_name: &l.repo_name,
+                    branch: &l.branch,
+                    key: &key,
+                    last_commit: l.last_commit,
+                    ahead: Some(l.ahead),
+                    behind: Some(l.behind),
+                    ignored: false,
+                },
+                now,
+            )
+        })
         .collect();
     match matches.len() {
         0 => bail!("no loop matches '{query}'. Run `loops` to see open ones."),
