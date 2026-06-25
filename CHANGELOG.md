@@ -1,6 +1,23 @@
 # Changelog
 ## [Unreleased]
 
+## [1.0.0] - 2026-06-25
+
+Query engine phase 1 — filter the inventory and resume by structured queries.
+
+### Highlights
+- `loops <query>` — filter inventory by bare terms and attributes (`repo:`, `branch:`, `key:`, `root:`, `idle:`, `ahead:`, `behind:`).
+- `loops resume <query>` — same query language for resumption; `+ignored` / `-ignored` tags.
+- Root aliases in config with collision-checked labels; canonical loop keys are now three segments (`root_label/repo/branch`).
+- Distill cache keyed by `root_label` to avoid name collisions across roots.
+
+### Breaking
+- Loop keys and cache entries use the 3-segment canonical form; existing `~/.open-loops/` state may need a one-time migration (see `docs/configuration.md`).
+
+### Docs
+- ADR 0003 sharpened for query engine, inventory cache, and canonical key.
+- `docs/features.md` and `docs/configuration.md` document query filtering and root aliases.
+
 ## [0.1.0] - 2026-06-24
 
 First public release.
