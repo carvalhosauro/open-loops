@@ -7,6 +7,9 @@ members = ["cargo:."]
 cargo-dist-version = "0.32.0"
 ci = "github"
 installers = ["shell", "homebrew"]
+# Tap repo must exist before the first tagged release. See docs/distribution.md.
+tap = "carvalhosauro/homebrew-tap"
+publish-jobs = ["homebrew"]
 targets = [
   "aarch64-apple-darwin",
   "x86_64-apple-darwin",

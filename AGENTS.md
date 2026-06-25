@@ -36,8 +36,11 @@ just cov     # cobertura, gate 70% (core: alvo 85%)
 ```bash
 just changelog                      # atualiza CHANGELOG.md
 git add CHANGELOG.md && git commit -m "docs: update changelog"
-git tag v0.1.0 && git push --tags   # CI builda binários + installers + release notes
+git tag v0.1.0 && git push --tags   # CI: binários, Homebrew tap, crates.io
 ```
+
+Secrets (one-time): `CARGO_REGISTRY_TOKEN`, `HOMEBREW_TAP_TOKEN`. Tap repo:
+`carvalhosauro/homebrew-tap`. Checklist: `docs/distribution.md`.
 
 ## Cursor Cloud specific instructions
 

@@ -6,7 +6,11 @@
 cargo install open-loops
 # or
 curl -fsSL https://github.com/carvalhosauro/open-loops/releases/latest/download/open-loops-installer.sh | sh
+# or (macOS/Linux, after first tap release)
+brew install carvalhosauro/tap/open-loops
 ```
+
+One-time maintainer setup (secrets, tap repo): [distribution.md](distribution.md).
 
 ## Configure
 
