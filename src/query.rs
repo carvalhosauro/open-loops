@@ -62,3 +62,53 @@ pub struct Candidate<'a> {
     pub behind: Option<u32>,
     pub ignored: bool,
 }
+
+/// Parses a query string into a `ScanPlan`. Tokens split on whitespace only —
+/// a `/` is literal inside a term.
+pub fn parse(input: &str) -> Result<ScanPlan> {
+    let mut plan = ScanPlan::default();
+    for tok in input.split_whitespace() {
+        if let Some((name, val)) = split_attr(tok) {
+            match name {
+                "repo" => plan.repo_filter = Some(val.to_string()),
+                "branch" => plan.branch_filter = Some(val.to_string()),
+                "key" => plan.key_filter = Some(val.to_string()),
+                "root" => plan.root_filter = Some(val.to_string()),
+                _ => unreachable!("split_attr only returns known names"),
+            }
+        } else {
+            plan.terms.push(tok.to_string());
+        }
+    }
+    Ok(plan)
+}
+
+/// Returns `(name, value)` when `tok` is `name:value` and `name` is a known
+/// attribute; otherwise `None` (the caller treats the token as a bare term).
+fn split_attr(tok: &str) -> Option<(&str, &str)> {
+    let (name, val) = tok.split_once(':')?;
+    matches!(name, "repo" | "branch" | "key" | "root").then_some((name, val))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_bare_terms_and_substring_attrs() {
+        let p = parse("api feat/login repo:billing branch:fix/ key:work/api root:~/work").unwrap();
+        assert_eq!(p.terms, vec!["api".to_string(), "feat/login".to_string()]);
+        assert_eq!(p.repo_filter.as_deref(), Some("billing"));
+        assert_eq!(p.branch_filter.as_deref(), Some("fix/"));
+        assert_eq!(p.key_filter.as_deref(), Some("work/api"));
+        assert_eq!(p.root_filter.as_deref(), Some("~/work"));
+        assert!(!p.need_ahead_behind);
+    }
+
+    #[test]
+    fn unknown_attr_prefix_is_a_bare_term() {
+        // a stray colon on an unknown name is not an error; it is a term
+        let p = parse("foo:bar").unwrap();
+        assert_eq!(p.terms, vec!["foo:bar".to_string()]);
+    }
+}
