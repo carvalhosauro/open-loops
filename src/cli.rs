@@ -11,9 +11,13 @@ use std::path::{Path, PathBuf};
 
 #[derive(Parser)]
 #[command(name = "loops", version, about = "Recover the context of paused work")]
+#[command(args_conflicts_with_subcommands = true)]
 pub struct Cli {
     #[command(subcommand)]
     pub command: Option<Command>,
+    /// Filter the inventory (e.g. `loops api idle:>7d`). See ADR 0003 grammar.
+    #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+    pub query: Vec<String>,
 }
 
 #[derive(Subcommand)]
@@ -55,14 +59,31 @@ fn resolve_loop(base: &Path, query: &str) -> Result<OpenLoop> {
         !cfg.roots.is_empty(),
         "no roots configured. Run: loops init <dir-with-your-repos>"
     );
-    let (found, warnings) = scanner::scan(&cfg.roots);
+    let mut plan = crate::query::parse(query)?;
+    plan.include_ignored = true; // resume can target an ignored loop by key
+    let labels = cfg.resolve_labels()?;
+    let (found, warnings) = scanner::scan(&cfg.roots, &labels);
     for w in &warnings {
         eprintln!("warning: {w}");
     }
-    let q = query.to_lowercase();
+    let now = chrono::Utc::now();
     let matches: Vec<&OpenLoop> = found
         .iter()
-        .filter(|l| l.key().to_lowercase().contains(&q))
+        .filter(|l| {
+            let key = l.key();
+            plan.matches(
+                &crate::query::Candidate {
+                    repo_name: &l.repo_name,
+                    branch: &l.branch,
+                    key: &key,
+                    last_commit: l.last_commit,
+                    ahead: Some(l.ahead),
+                    behind: Some(l.behind),
+                    ignored: false,
+                },
+                now,
+            )
+        })
         .collect();
     match matches.len() {
         0 => bail!("no loop matches '{query}'. Run `loops` to see open ones."),
@@ -106,24 +127,45 @@ fn gather_resume_evidence(base: &Path, lp: &OpenLoop) -> Result<ResumeEvidence> 
     })
 }
 
-pub fn run_list(base: &Path) -> Result<()> {
+pub fn run_list(base: &Path, query: &str) -> Result<()> {
     let store = Store::new(base.to_path_buf());
     let cfg = store.load()?;
     ensure!(
         !cfg.roots.is_empty(),
         "no roots configured. Run: loops init <dir-with-your-repos>"
     );
+    let plan = crate::query::parse(query)?;
+    let labels = cfg.resolve_labels()?;
     progress("scanning git repositories…");
-    let (found, warnings) = scanner::scan(&cfg.roots);
+    let (found, warnings) = scanner::scan(&cfg.roots, &labels);
     for w in &warnings {
         eprintln!("warning: {w}");
     }
     let ignores = Ignores::load(base)?;
+    let now = chrono::Utc::now();
     let visible: Vec<OpenLoop> = found
         .into_iter()
-        .filter(|l| !ignores.contains(&l.key()))
+        .filter(|l| {
+            let key = l.key();
+            plan.matches(
+                &crate::query::Candidate {
+                    repo_name: &l.repo_name,
+                    branch: &l.branch,
+                    key: &key,
+                    last_commit: l.last_commit,
+                    ahead: Some(l.ahead),
+                    behind: Some(l.behind),
+                    ignored: ignores.contains(&key),
+                },
+                now,
+            )
+        })
         .collect();
-    print!("{}", output::render_table(&visible, chrono::Utc::now()));
+    if visible.is_empty() && !query.trim().is_empty() {
+        eprintln!("No loops match: {query}");
+        eprintln!("(hint: run `loops` to list all)");
+    }
+    print!("{}", output::render_table(&visible, now));
     Ok(())
 }
 

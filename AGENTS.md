@@ -20,6 +20,7 @@ just cov     # cobertura, gate 70% (core: alvo 85%)
 - `src/distill.rs` — prompt + LLM via comando configurável (testes usam `cat`)
 - `src/cache.rs` — cache por `branch@head-sha`
 - `src/config.rs`, `src/ignores.rs` — estado em `~/.open-loops/`
+- `src/query.rs` — parser de query → `ScanPlan` + avaliação em memória (ADR 0003)
 - `src/cli.rs` — orquestração; camada fina, coberta por `tests/cli.rs`
 
 ## Convenções

@@ -62,6 +62,7 @@ pub fn default_branch(repo: &Path) -> Result<String> {
 /// An open loop: an unmerged branch with its own commits.
 #[derive(Debug, Clone)]
 pub struct OpenLoop {
+    pub root_label: String,
     pub repo_name: String,
     pub repo_path: PathBuf,
     pub branch: String,
@@ -72,9 +73,9 @@ pub struct OpenLoop {
 }
 
 impl OpenLoop {
-    /// Canonical key used in resume/ignore: "repo/branch".
+    /// Canonical key used in resume/ignore: "root-label/repo/branch".
     pub fn key(&self) -> String {
-        format!("{}/{}", self.repo_name, self.branch)
+        format!("{}/{}/{}", self.root_label, self.repo_name, self.branch)
     }
 }
 
@@ -121,7 +122,7 @@ fn walk(dir: &Path, depth: usize, repos: &mut Vec<PathBuf>) {
 /// # Errors
 ///
 /// Returns `Err` if git fails or if the default branch is not found.
-pub fn open_loops(repo: &Path) -> Result<Vec<OpenLoop>> {
+pub fn open_loops(repo: &Path, root_label: &str) -> Result<Vec<OpenLoop>> {
     let default = default_branch(repo)?;
     let merged: std::collections::HashSet<String> = git(
         repo,
@@ -169,6 +170,7 @@ pub fn open_loops(repo: &Path) -> Result<Vec<OpenLoop>> {
             .with_context(|| format!("invalid date from git: {date}"))?
             .with_timezone(&Utc);
         result.push(OpenLoop {
+            root_label: root_label.to_string(),
             repo_name: repo_name.clone(),
             repo_path: repo.to_path_buf(),
             branch: branch.to_string(),
@@ -184,12 +186,15 @@ pub fn open_loops(repo: &Path) -> Result<Vec<OpenLoop>> {
 /// Scans all repos found under the roots in parallel.
 ///
 /// Individual repo failures become warnings and never abort the scan.
-pub fn scan(roots: &[PathBuf]) -> (Vec<OpenLoop>, Vec<String>) {
+pub fn scan(roots: &[PathBuf], labels: &[(PathBuf, String)]) -> (Vec<OpenLoop>, Vec<String>) {
     let repos = find_repos(roots);
     let results: Vec<Result<Vec<OpenLoop>>> = std::thread::scope(|s| {
         let handles: Vec<_> = repos
             .iter()
-            .map(|repo| s.spawn(move || open_loops(repo)))
+            .map(|repo| {
+                let label = crate::config::label_for_repo(labels, repo);
+                s.spawn(move || open_loops(repo, &label))
+            })
             .collect();
         handles
             .into_iter()
@@ -312,12 +317,13 @@ mod tests {
         testutil::add_branch_with_commit(&repo, "feat/x", "x.txt");
         testutil::git(&repo, &["branch", "merged"]); // points to main => merged
 
-        let loops = open_loops(&repo).unwrap();
+        let loops = open_loops(&repo, "root").unwrap();
         assert_eq!(loops.len(), 1);
         let l = &loops[0];
         assert_eq!(l.branch, "feat/x");
         assert_eq!(l.repo_name, "app");
-        assert_eq!(l.key(), "app/feat/x");
+        assert_eq!(l.root_label, "root");
+        assert_eq!(l.key(), "root/app/feat/x");
         assert_eq!(l.ahead, 1);
         assert_eq!(l.behind, 0);
         assert_eq!(l.head_sha.len(), 40);
@@ -334,9 +340,10 @@ mod tests {
         std::fs::create_dir_all(&empty).unwrap();
         testutil::git(&empty, &["init", "-b", "main"]);
 
-        let (loops, warnings) = scan(&[tmp.path().to_path_buf()]);
+        let labels = vec![(tmp.path().to_path_buf(), "r".to_string())];
+        let (loops, warnings) = scan(&[tmp.path().to_path_buf()], &labels);
         assert_eq!(loops.len(), 1);
-        assert_eq!(loops[0].key(), "good/feat/ok");
+        assert_eq!(loops[0].key(), "r/good/feat/ok");
         assert_eq!(warnings.len(), 1);
         assert!(warnings[0].contains("empty"));
     }

@@ -153,6 +153,7 @@ mod tests {
 
     fn lp(branch: &str, idle_days: i64) -> OpenLoop {
         OpenLoop {
+            root_label: "app".into(),
             repo_name: "app".into(),
             repo_path: PathBuf::from("/tmp/app"),
             branch: branch.into(),

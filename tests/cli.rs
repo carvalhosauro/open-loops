@@ -95,7 +95,7 @@ fn full_flow_init_list_resume_cache_ignore() {
 
     // ignore removes from the list
     loops(&home)
-        .args(["ignore", "meu-app/feat/login"])
+        .args(["ignore", "projetos/meu-app/feat/login"])
         .assert()
         .success();
     loops(&home)
@@ -378,4 +378,32 @@ fn worktrees_lists_and_suggests_cleanup() {
 
     // the wt alias works
     loops(&home).arg("wt").assert().success();
+}
+
+#[test]
+fn list_filters_by_query_term() {
+    let tmp = tempfile::tempdir().unwrap();
+    let home = tmp.path().join("home");
+    let root = tmp.path().join("projects");
+    for name in ["api", "web"] {
+        let repo = root.join(name);
+        std::fs::create_dir_all(&repo).unwrap();
+        git(&repo, &["init", "-b", "main"]);
+        std::fs::write(repo.join("a.txt"), "a").unwrap();
+        git(&repo, &["add", "."]);
+        git(&repo, &["commit", "-m", "init"]);
+        git(&repo, &["checkout", "-b", "feat/x"]);
+        std::fs::write(repo.join("b.txt"), "b").unwrap();
+        git(&repo, &["add", "."]);
+        git(&repo, &["commit", "-m", "wip"]);
+    }
+    loops(&home).arg("init").arg(&root).assert().success();
+
+    // bare `loops` shows both; `loops api` shows only api, with 3-segment key
+    loops(&home)
+        .arg("api")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("projects/api/feat/x"))
+        .stdout(predicate::str::contains("web/feat/x").not());
 }
