@@ -176,6 +176,8 @@ fn walk(dir: &Path, depth: usize, scan_depth: usize, candidates: &mut Vec<PathBu
 /// Returns `Err` if git fails or if the default branch is not found.
 pub fn open_loops(repo: &Path, root_label: &str) -> Result<Vec<OpenLoop>> {
     let default = default_branch(repo)?;
+    let common_dir = git_common_dir(repo)?;
+    let repo_name = repo_name_from_common_dir(&common_dir);
     let merged: std::collections::HashSet<String> = git(
         repo,
         &["branch", "--merged", &default, "--format=%(refname:short)"],
@@ -183,10 +185,6 @@ pub fn open_loops(repo: &Path, root_label: &str) -> Result<Vec<OpenLoop>> {
     .lines()
     .map(|s| s.trim().to_string())
     .collect();
-    let repo_name = repo
-        .file_name()
-        .map(|n| n.to_string_lossy().into_owned())
-        .unwrap_or_else(|| repo.display().to_string());
     let raw = git(
         repo,
         &[
@@ -384,6 +382,33 @@ mod tests {
             .collect();
         assert!(!shallow_names.contains(&"repo-deep".to_string()));
         assert!(shallow_names.contains(&"repo-shallow".to_string()));
+    }
+
+    #[test]
+    fn open_loops_uses_common_dir_repo_name_in_bare_layout() {
+        let tmp = tempfile::tempdir().unwrap();
+        let container = tmp.path().join("pigz-api");
+        testutil::init_bare_worktree_container(&container);
+        testutil::add_named_worktree(&container, "dev", "dev");
+        testutil::add_branch_on_bare(&container.join(".bare"), "feat/x", "x.txt");
+
+        let loops = open_loops(&container, "root").unwrap();
+        assert_eq!(loops.len(), 1);
+        assert_eq!(loops[0].repo_name, "pigz-api");
+        assert_eq!(loops[0].branch, "feat/x");
+        assert_eq!(loops[0].key(), "root/pigz-api/feat/x");
+    }
+
+    #[test]
+    fn open_loops_bare_root_repo_name_strips_dot_git_suffix() {
+        let tmp = tempfile::tempdir().unwrap();
+        let bare = tmp.path().join("foo.git");
+        testutil::init_bare_repo(&bare);
+        testutil::seed_bare_main(&bare);
+        testutil::add_branch_on_bare(&bare, "feat/y", "y.txt");
+
+        let loops = open_loops(&bare, "r").unwrap();
+        assert_eq!(loops[0].repo_name, "foo");
     }
 
     #[test]
