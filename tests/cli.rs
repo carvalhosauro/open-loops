@@ -95,7 +95,7 @@ fn full_flow_init_list_resume_cache_ignore() {
 
     // ignore removes from the list
     loops(&home)
-        .args(["ignore", "meu-app/feat/login"])
+        .args(["ignore", "projetos/meu-app/feat/login"])
         .assert()
         .success();
     loops(&home)

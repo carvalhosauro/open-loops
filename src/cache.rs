@@ -55,6 +55,7 @@ mod tests {
 
     fn fake_loop(sha: &str) -> OpenLoop {
         OpenLoop {
+            root_label: "work".into(),
             repo_name: "app".into(),
             repo_path: PathBuf::from("/tmp/app"),
             branch: "feat/login".into(),

@@ -55,7 +55,8 @@ fn resolve_loop(base: &Path, query: &str) -> Result<OpenLoop> {
         !cfg.roots.is_empty(),
         "no roots configured. Run: loops init <dir-with-your-repos>"
     );
-    let (found, warnings) = scanner::scan(&cfg.roots);
+    let labels = cfg.resolve_labels()?;
+    let (found, warnings) = scanner::scan(&cfg.roots, &labels);
     for w in &warnings {
         eprintln!("warning: {w}");
     }
@@ -113,8 +114,9 @@ pub fn run_list(base: &Path) -> Result<()> {
         !cfg.roots.is_empty(),
         "no roots configured. Run: loops init <dir-with-your-repos>"
     );
+    let labels = cfg.resolve_labels()?;
     progress("scanning git repositories…");
-    let (found, warnings) = scanner::scan(&cfg.roots);
+    let (found, warnings) = scanner::scan(&cfg.roots, &labels);
     for w in &warnings {
         eprintln!("warning: {w}");
     }

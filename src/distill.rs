@@ -240,6 +240,7 @@ mod tests {
 
     fn fake_loop() -> OpenLoop {
         OpenLoop {
+            root_label: "app".into(),
             repo_name: "app".into(),
             repo_path: PathBuf::from("/tmp/app"),
             branch: "feat/login".into(),
@@ -342,6 +343,7 @@ mod tests {
     #[test]
     fn with_sources_short_sha_when_head_sha_under_7_chars() {
         let lp = OpenLoop {
+            root_label: "app".into(),
             repo_name: "app".into(),
             repo_path: PathBuf::from("/tmp/app"),
             branch: "feat/x".into(),
