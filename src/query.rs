@@ -102,12 +102,14 @@ pub fn parse(input: &str) -> Result<ScanPlan> {
                         .push(AttrFilter::Idle(cmp, parse_duration(rest)?));
                 }
                 "ahead" => {
+                    // split_cmp(val, false) always returns Some — defaults to Cmp::Eq when no operator
                     let (cmp, rest) = split_cmp(val, false).expect("optional op never None");
                     plan.attr_filters
                         .push(AttrFilter::Ahead(cmp, parse_count(rest)?));
                     plan.need_ahead_behind = true;
                 }
                 "behind" => {
+                    // split_cmp(val, false) always returns Some — defaults to Cmp::Eq when no operator
                     let (cmp, rest) = split_cmp(val, false).expect("optional op never None");
                     plan.attr_filters
                         .push(AttrFilter::Behind(cmp, parse_count(rest)?));
