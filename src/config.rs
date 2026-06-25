@@ -26,6 +26,9 @@ pub struct Config {
     /// KB read from the tail of each session.
     #[serde(default = "default_max_session_kb")]
     pub max_session_kb: u64,
+    /// Maximum directory depth (from each root) to search for git repositories.
+    #[serde(default = "default_scan_depth")]
+    pub scan_depth: usize,
 }
 
 fn default_llm_command() -> String {
@@ -46,6 +49,10 @@ fn default_max_session_kb() -> u64 {
     50
 }
 
+fn default_scan_depth() -> usize {
+    4
+}
+
 impl Default for Config {
     fn default() -> Self {
         Self {
@@ -55,6 +62,7 @@ impl Default for Config {
             sessions_dir: default_sessions_dir(),
             max_sessions: default_max_sessions(),
             max_session_kb: default_max_session_kb(),
+            scan_depth: default_scan_depth(),
         }
     }
 }
@@ -215,6 +223,24 @@ mod tests {
         let labels = cfg.resolve_labels().unwrap();
         assert!(labels.contains(&(personal.clone(), "p".to_string())));
         let _ = store;
+    }
+
+    #[test]
+    fn config_scan_depth_defaults_to_four() {
+        let cfg = Config::default();
+        assert_eq!(cfg.scan_depth, 4);
+    }
+
+    #[test]
+    fn config_scan_depth_roundtrips_from_toml() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = Store::new(tmp.path().join("state"));
+        let cfg = Config {
+            scan_depth: 6,
+            ..Config::default()
+        };
+        store.save(&cfg).unwrap();
+        assert_eq!(store.load().unwrap().scan_depth, 6);
     }
 
     #[test]
