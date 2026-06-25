@@ -349,7 +349,7 @@ mod tests {
     #[test]
     fn find_repos_dedups_container_and_worktrees() {
         let tmp = tempfile::tempdir().unwrap();
-        let container = tmp.path().join("pigz-api");
+        let container = tmp.path().join("my-app");
         testutil::init_bare_worktree_container(&container);
         let dev = container.join("dev");
         testutil::add_named_worktree(&container, "dev", "dev");
@@ -399,7 +399,7 @@ mod tests {
     #[test]
     fn find_repos_finds_bare_worktree_container_via_git_file() {
         let tmp = tempfile::tempdir().unwrap();
-        let container = tmp.path().join("pigz-api");
+        let container = tmp.path().join("my-app");
         testutil::init_bare_worktree_container(&container);
         let (repos, _) = find_repos(&[tmp.path().to_path_buf()], 4);
         assert_eq!(repos.len(), 1);
@@ -420,16 +420,16 @@ mod tests {
     #[test]
     fn open_loops_uses_common_dir_repo_name_in_bare_layout() {
         let tmp = tempfile::tempdir().unwrap();
-        let container = tmp.path().join("pigz-api");
+        let container = tmp.path().join("my-app");
         testutil::init_bare_worktree_container(&container);
         testutil::add_named_worktree(&container, "dev", "dev");
         testutil::add_branch_on_bare(&container.join(".bare"), "feat/x", "x.txt");
 
         let loops = open_loops(&container, "root").unwrap();
         assert_eq!(loops.len(), 1);
-        assert_eq!(loops[0].repo_name, "pigz-api");
+        assert_eq!(loops[0].repo_name, "my-app");
         assert_eq!(loops[0].branch, "feat/x");
-        assert_eq!(loops[0].key(), "root/pigz-api/feat/x");
+        assert_eq!(loops[0].key(), "root/my-app/feat/x");
     }
 
     #[test]
@@ -538,7 +538,7 @@ mod tests {
         use std::path::Path;
 
         let cases: &[(&str, &str)] = &[
-            ("/home/u/pigz-api/.bare", "pigz-api"),
+            ("/home/u/my-app/.bare", "my-app"),
             ("/home/u/app/.git", "app"),
             ("/srv/git/foo.git", "foo"),
             ("/srv/git/myproject", "myproject"),

@@ -413,7 +413,7 @@ fn list_finds_branches_in_bare_worktree_layout() {
     let tmp = tempfile::tempdir().unwrap();
     let home = tmp.path().join("home");
     let root = tmp.path().join("projects");
-    let container = root.join("pigz-api");
+    let container = root.join("my-app");
     std::fs::create_dir_all(&container).unwrap();
 
     // inline git setup (tests/cli.rs has its own git helper)
@@ -440,5 +440,5 @@ fn list_finds_branches_in_bare_worktree_layout() {
     loops(&home)
         .assert()
         .success()
-        .stdout(predicate::str::contains("pigz-api/feat/login"));
+        .stdout(predicate::str::contains("my-app/feat/login"));
 }
