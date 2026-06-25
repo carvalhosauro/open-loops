@@ -82,6 +82,22 @@ impl OpenLoop {
 const MAX_DEPTH: usize = 3;
 const SKIP_DIRS: [&str; 2] = ["node_modules", "target"];
 
+/// Derives a stable repo name from the absolute git common-dir (§5 of Spec Fase A).
+pub fn repo_name_from_common_dir(common_dir: &Path) -> String {
+    let base = common_dir
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    if base == ".git" || base == ".bare" {
+        return common_dir
+            .parent()
+            .and_then(|p| p.file_name())
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or(base);
+    }
+    base.strip_suffix(".git").map(str::to_owned).unwrap_or(base)
+}
+
 /// Walks roots up to MAX_DEPTH looking for directories with .git.
 ///
 /// Hidden directories (name starts with `.`) and those listed in `SKIP_DIRS`
@@ -382,5 +398,24 @@ mod tests {
         // no commits: refs/heads/main and refs/heads/master do not exist
         let err = default_branch(repo).unwrap_err();
         assert!(err.to_string().contains("couldn't find the default branch"));
+    }
+
+    #[test]
+    fn repo_name_from_common_dir_table() {
+        use std::path::Path;
+
+        let cases: &[(&str, &str)] = &[
+            ("/home/u/pigz-api/.bare", "pigz-api"),
+            ("/home/u/app/.git", "app"),
+            ("/srv/git/foo.git", "foo"),
+            ("/srv/git/myproject", "myproject"),
+        ];
+        for (common, want) in cases {
+            assert_eq!(
+                repo_name_from_common_dir(Path::new(common)),
+                *want,
+                "common_dir={common}"
+            );
+        }
     }
 }
