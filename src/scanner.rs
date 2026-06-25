@@ -389,6 +389,35 @@ mod tests {
     }
 
     #[test]
+    fn find_repos_finds_normal_git_dir_repo() {
+        let tmp = tempfile::tempdir().unwrap();
+        testutil::init_repo(&tmp.path().join("app"));
+        let (repos, _) = find_repos(&[tmp.path().to_path_buf()], 4);
+        assert_eq!(repos.len(), 1);
+    }
+
+    #[test]
+    fn find_repos_finds_bare_worktree_container_via_git_file() {
+        let tmp = tempfile::tempdir().unwrap();
+        let container = tmp.path().join("pigz-api");
+        testutil::init_bare_worktree_container(&container);
+        let (repos, _) = find_repos(&[tmp.path().to_path_buf()], 4);
+        assert_eq!(repos.len(), 1);
+        assert_eq!(repos[0], container);
+    }
+
+    #[test]
+    fn find_repos_finds_pure_bare_repo() {
+        let tmp = tempfile::tempdir().unwrap();
+        let bare = tmp.path().join("foo.git");
+        testutil::init_bare_repo(&bare);
+        testutil::seed_bare_main(&bare);
+        let (repos, _) = find_repos(&[tmp.path().to_path_buf()], 4);
+        assert_eq!(repos.len(), 1);
+        assert_eq!(repos[0], bare);
+    }
+
+    #[test]
     fn open_loops_uses_common_dir_repo_name_in_bare_layout() {
         let tmp = tempfile::tempdir().unwrap();
         let container = tmp.path().join("pigz-api");
