@@ -35,6 +35,13 @@ roots = ["/home/you/work", "/home/you/personal"]
 If two roots resolve to the same label and neither has an alias, `loops` exits
 with an actionable error.
 
+### Upgrading from 0.1.x
+
+Keys gained a `root-label/` prefix (they were `repo/branch`). Existing
+`ignores.toml` entries no longer match — re-run `loops ignore <key>` with the
+new 3-segment key shown by `loops`. The distillation cache regenerates on its
+own (safe to delete `~/.open-loops/cache/`).
+
 ## State files
 
 ```
