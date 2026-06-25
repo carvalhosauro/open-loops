@@ -166,7 +166,7 @@ pub fn worktrees(repo: &Path) -> Result<Vec<Worktree>> {
 ///
 /// Per-repo failures become warnings, never abort.
 pub fn scan_worktrees(roots: &[PathBuf]) -> (Vec<Worktree>, Vec<String>) {
-    let repos = find_repos(roots);
+    let (repos, mut warnings) = find_repos(roots, 4);
     let results: Vec<Result<Vec<Worktree>>> = std::thread::scope(|s| {
         let handles: Vec<_> = repos
             .iter()
@@ -181,7 +181,6 @@ pub fn scan_worktrees(roots: &[PathBuf]) -> (Vec<Worktree>, Vec<String>) {
             .collect()
     });
     let mut all = Vec::new();
-    let mut warnings = Vec::new();
     for (repo, res) in repos.iter().zip(results) {
         match res {
             Ok(mut w) => all.append(&mut w),
