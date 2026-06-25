@@ -80,8 +80,11 @@ pub fn parse(input: &str) -> Result<ScanPlan> {
             "+stale" => bail!("'+stale' is not supported yet (ADR 0003 phase 5)"),
             _ => {}
         }
-        if tok.starts_with('@') {
-            bail!("contexts (@{}) are not supported yet (ADR 0003 phase 4)", &tok[1..]);
+        if let Some(name) = tok.strip_prefix('@') {
+            bail!(
+                "contexts (@{}) are not supported yet (ADR 0003 phase 4)",
+                name
+            );
         }
         if tok.starts_with(':') {
             bail!("reports ({tok}) are not supported yet (ADR 0003 phase 5)");
@@ -95,7 +98,8 @@ pub fn parse(input: &str) -> Result<ScanPlan> {
                 "idle" => {
                     let (cmp, rest) = split_cmp(val, true)
                         .ok_or_else(|| anyhow::anyhow!("idle needs a comparator, e.g. idle:>7d"))?;
-                    plan.attr_filters.push(AttrFilter::Idle(cmp, parse_duration(rest)?));
+                    plan.attr_filters
+                        .push(AttrFilter::Idle(cmp, parse_duration(rest)?));
                 }
                 "ahead" => {
                     let (cmp, rest) = split_cmp(val, false).expect("optional op never None");
@@ -132,7 +136,12 @@ fn split_attr(tok: &str) -> Option<(&str, &str)> {
 /// Splits a leading comparator off a value. When `require_op` and none is
 /// present, returns `None`; otherwise defaults to `Cmp::Eq`.
 fn split_cmp(val: &str, require_op: bool) -> Option<(Cmp, &str)> {
-    for (prefix, cmp) in [(">=", Cmp::Ge), ("<=", Cmp::Le), (">", Cmp::Gt), ("<", Cmp::Lt)] {
+    for (prefix, cmp) in [
+        (">=", Cmp::Ge),
+        ("<=", Cmp::Le),
+        (">", Cmp::Gt),
+        ("<", Cmp::Lt),
+    ] {
         if let Some(rest) = val.strip_prefix(prefix) {
             return Some((cmp, rest));
         }
@@ -151,10 +160,7 @@ fn parse_count(s: &str) -> Result<u32> {
 
 /// Parses `<N><unit>` where unit is one of m/h/d/w.
 pub fn parse_duration(s: &str) -> Result<Duration> {
-    let (num, unit) = s.split_at(
-        s.find(|c: char| !c.is_ascii_digit())
-            .unwrap_or(s.len()),
-    );
+    let (num, unit) = s.split_at(s.find(|c: char| !c.is_ascii_digit()).unwrap_or(s.len()));
     let n: i64 = num
         .parse()
         .map_err(|_| anyhow::anyhow!("invalid duration '{s}' (expected e.g. 7d)"))?;
@@ -164,6 +170,55 @@ pub fn parse_duration(s: &str) -> Result<Duration> {
         "d" => Ok(Duration::days(n)),
         "w" => Ok(Duration::weeks(n)),
         other => bail!("invalid duration unit '{other}' (use m, h, d, or w)"),
+    }
+}
+
+impl ScanPlan {
+    /// True when the candidate satisfies every term, substring filter, and
+    /// attribute. `root_filter` is intentionally ignored here (push-down).
+    pub fn matches(&self, c: &Candidate, now: DateTime<Utc>) -> bool {
+        if c.ignored && !self.include_ignored {
+            return false;
+        }
+        let contains_ci =
+            |hay: &str, needle: &str| hay.to_lowercase().contains(&needle.to_lowercase());
+        for t in &self.terms {
+            if !(contains_ci(c.repo_name, t) || contains_ci(c.branch, t) || contains_ci(c.key, t)) {
+                return false;
+            }
+        }
+        if let Some(f) = &self.repo_filter {
+            if !contains_ci(c.repo_name, f) {
+                return false;
+            }
+        }
+        if let Some(f) = &self.branch_filter {
+            if !contains_ci(c.branch, f) {
+                return false;
+            }
+        }
+        if let Some(f) = &self.key_filter {
+            if !contains_ci(c.key, f) {
+                return false;
+            }
+        }
+        for attr in &self.attr_filters {
+            let ok = match attr {
+                AttrFilter::Idle(cmp, dur) => {
+                    cmp.test_i64((now - c.last_commit).num_seconds(), dur.num_seconds())
+                }
+                AttrFilter::Ahead(cmp, n) => {
+                    c.ahead.is_some_and(|a| cmp.test_i64(a.into(), (*n).into()))
+                }
+                AttrFilter::Behind(cmp, n) => c
+                    .behind
+                    .is_some_and(|b| cmp.test_i64(b.into(), (*n).into())),
+            };
+            if !ok {
+                return false;
+            }
+        }
+        true
     }
 }
 
@@ -236,5 +291,53 @@ mod tests {
         assert!(parse("@work").unwrap_err().to_string().contains("context"));
         assert!(parse(":hot").unwrap_err().to_string().contains("report"));
         assert!(parse("+stale").unwrap_err().to_string().contains("stale"));
+    }
+
+    fn cand<'a>(repo: &'a str, branch: &'a str, key: &'a str, days_idle: i64) -> Candidate<'a> {
+        Candidate {
+            repo_name: repo,
+            branch,
+            key,
+            last_commit: Utc::now() - Duration::days(days_idle),
+            ahead: Some(1),
+            behind: Some(0),
+            ignored: false,
+        }
+    }
+
+    #[test]
+    fn matches_terms_case_insensitive_over_repo_branch_key() {
+        let p = parse("API").unwrap();
+        let c = cand("my-api", "feat/x", "work/my-api/feat/x", 1);
+        assert!(p.matches(&c, Utc::now()));
+        let p2 = parse("nope").unwrap();
+        assert!(!p2.matches(&c, Utc::now()));
+    }
+
+    #[test]
+    fn matches_idle_and_numeric_attrs() {
+        let now = Utc::now();
+        let c = cand("api", "feat/x", "w/api/feat/x", 10);
+        assert!(parse("idle:>7d").unwrap().matches(&c, now));
+        assert!(!parse("idle:<7d").unwrap().matches(&c, now));
+        assert!(parse("behind:0").unwrap().matches(&c, now));
+        assert!(!parse("behind:>0").unwrap().matches(&c, now));
+    }
+
+    #[test]
+    fn matches_excludes_ignored_unless_plus_ignored() {
+        let now = Utc::now();
+        let mut c = cand("api", "feat/x", "w/api/feat/x", 1);
+        c.ignored = true;
+        assert!(!parse("api").unwrap().matches(&c, now));
+        assert!(parse("api +ignored").unwrap().matches(&c, now));
+    }
+
+    #[test]
+    fn matches_none_ahead_behind_fails_the_attr() {
+        let now = Utc::now();
+        let mut c = cand("api", "feat/x", "w/api/feat/x", 1);
+        c.behind = None;
+        assert!(!parse("behind:0").unwrap().matches(&c, now));
     }
 }
