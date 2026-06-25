@@ -79,8 +79,15 @@ impl OpenLoop {
     }
 }
 
-const MAX_DEPTH: usize = 3;
 const SKIP_DIRS: [&str; 2] = ["node_modules", "target"];
+
+fn looks_like_bare(dir: &Path) -> bool {
+    dir.join("HEAD").is_file() && dir.join("objects").is_dir() && dir.join("refs").is_dir()
+}
+
+fn is_repo_candidate(dir: &Path) -> bool {
+    dir.join(".git").exists() || looks_like_bare(dir)
+}
 
 /// Derives a stable repo name from the absolute git common-dir (§5 of Spec Fase A).
 pub fn repo_name_from_common_dir(common_dir: &Path) -> String {
@@ -118,18 +125,18 @@ pub fn git_common_dir(path: &Path) -> Result<PathBuf> {
 pub fn find_repos(roots: &[PathBuf]) -> Vec<PathBuf> {
     let mut repos = Vec::new();
     for root in roots {
-        walk(root, 0, &mut repos);
+        walk(root, 0, 3, &mut repos);
     }
     repos.sort();
     repos
 }
 
-fn walk(dir: &Path, depth: usize, repos: &mut Vec<PathBuf>) {
-    if dir.join(".git").is_dir() {
-        repos.push(dir.to_path_buf());
+fn walk(dir: &Path, depth: usize, scan_depth: usize, candidates: &mut Vec<PathBuf>) {
+    if is_repo_candidate(dir) {
+        candidates.push(dir.to_path_buf());
         return;
     }
-    if depth >= MAX_DEPTH {
+    if depth >= scan_depth {
         return;
     }
     let Ok(entries) = std::fs::read_dir(dir) else {
@@ -142,7 +149,7 @@ fn walk(dir: &Path, depth: usize, repos: &mut Vec<PathBuf>) {
         if !path.is_dir() || name.starts_with('.') || SKIP_DIRS.contains(&name.as_ref()) {
             continue;
         }
-        walk(&path, depth + 1, repos);
+        walk(&path, depth + 1, scan_depth, candidates);
     }
 }
 
