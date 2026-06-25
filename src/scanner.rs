@@ -98,6 +98,19 @@ pub fn repo_name_from_common_dir(common_dir: &Path) -> String {
     base.strip_suffix(".git").map(str::to_owned).unwrap_or(base)
 }
 
+/// Absolute path of the git common-dir for `path` (bare store / `.git` dir).
+///
+/// # Errors
+///
+/// Returns `Err` when `path` is not inside a git repository.
+pub fn git_common_dir(path: &Path) -> Result<PathBuf> {
+    let raw = git(
+        path,
+        &["rev-parse", "--path-format=absolute", "--git-common-dir"],
+    )?;
+    Ok(PathBuf::from(raw))
+}
+
 /// Walks roots up to MAX_DEPTH looking for directories with .git.
 ///
 /// Hidden directories (name starts with `.`) and those listed in `SKIP_DIRS`
@@ -398,6 +411,20 @@ mod tests {
         // no commits: refs/heads/main and refs/heads/master do not exist
         let err = default_branch(repo).unwrap_err();
         assert!(err.to_string().contains("couldn't find the default branch"));
+    }
+
+    #[test]
+    fn git_common_dir_resolves_normal_and_bare_pointer() {
+        let tmp = tempfile::tempdir().unwrap();
+        let normal = tmp.path().join("app");
+        testutil::init_repo(&normal);
+        let normal_common = git_common_dir(&normal).unwrap();
+        assert!(normal_common.ends_with(".git"));
+
+        let container = tmp.path().join("container");
+        testutil::init_bare_worktree_container(&container);
+        let bare_common = git_common_dir(&container).unwrap();
+        assert!(bare_common.ends_with(".bare"));
     }
 
     #[test]
