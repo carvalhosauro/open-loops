@@ -68,6 +68,24 @@ pub struct Candidate<'a> {
 pub fn parse(input: &str) -> Result<ScanPlan> {
     let mut plan = ScanPlan::default();
     for tok in input.split_whitespace() {
+        match tok {
+            "+ignored" => {
+                plan.include_ignored = true;
+                continue;
+            }
+            "-ignored" => {
+                plan.include_ignored = false;
+                continue;
+            }
+            "+stale" => bail!("'+stale' is not supported yet (ADR 0003 phase 5)"),
+            _ => {}
+        }
+        if tok.starts_with('@') {
+            bail!("contexts (@{}) are not supported yet (ADR 0003 phase 4)", &tok[1..]);
+        }
+        if tok.starts_with(':') {
+            bail!("reports ({tok}) are not supported yet (ADR 0003 phase 5)");
+        }
         if let Some((name, val)) = split_attr(tok) {
             match name {
                 "repo" => plan.repo_filter = Some(val.to_string()),
@@ -204,5 +222,19 @@ mod tests {
         assert_eq!(parse_duration("6h").unwrap(), Duration::hours(6));
         assert_eq!(parse_duration("2d").unwrap(), Duration::days(2));
         assert_eq!(parse_duration("3w").unwrap(), Duration::weeks(3));
+    }
+
+    #[test]
+    fn parse_ignored_tags() {
+        assert!(parse("+ignored").unwrap().include_ignored);
+        assert!(!parse("-ignored").unwrap().include_ignored);
+        assert!(!parse("api").unwrap().include_ignored); // default hides
+    }
+
+    #[test]
+    fn reserved_context_report_stale_error_clearly() {
+        assert!(parse("@work").unwrap_err().to_string().contains("context"));
+        assert!(parse(":hot").unwrap_err().to_string().contains("report"));
+        assert!(parse("+stale").unwrap_err().to_string().contains("stale"));
     }
 }
