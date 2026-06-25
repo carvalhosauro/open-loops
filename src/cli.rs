@@ -62,7 +62,7 @@ fn resolve_loop(base: &Path, query: &str) -> Result<OpenLoop> {
     let mut plan = crate::query::parse(query)?;
     plan.include_ignored = true; // resume can target an ignored loop by key
     let labels = cfg.resolve_labels()?;
-    let (found, warnings) = scanner::scan(&cfg.roots, &labels);
+    let (found, warnings) = scanner::scan(&cfg.roots, &labels, cfg.scan_depth);
     for w in &warnings {
         eprintln!("warning: {w}");
     }
@@ -137,7 +137,7 @@ pub fn run_list(base: &Path, query: &str) -> Result<()> {
     let plan = crate::query::parse(query)?;
     let labels = cfg.resolve_labels()?;
     progress("scanning git repositories…");
-    let (found, warnings) = scanner::scan(&cfg.roots, &labels);
+    let (found, warnings) = scanner::scan(&cfg.roots, &labels, cfg.scan_depth);
     for w in &warnings {
         eprintln!("warning: {w}");
     }
@@ -249,7 +249,7 @@ pub fn run_worktrees(base: &Path) -> Result<()> {
         "no roots configured. Run: loops init <dir-with-your-repos>"
     );
     progress("scanning git worktrees…");
-    let (wts, warnings) = worktrees::scan_worktrees(&cfg.roots);
+    let (wts, warnings) = worktrees::scan_worktrees(&cfg.roots, cfg.scan_depth);
     for w in &warnings {
         eprintln!("warning: {w}");
     }

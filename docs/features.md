@@ -12,6 +12,10 @@ Unmerged branches across all repos under the configured roots, sorted from
 most idle to most recent. Progress on stderr: `scanning git repositories…`.
 No LLM — always fast.
 
+Discovery is layout-agnostic: normal repos, worktrees, and bare stores under your
+configured roots are found automatically. Repo names come from git's common-dir,
+not from worktree folder names.
+
 ### Filtering
 
 ```bash

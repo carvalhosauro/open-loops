@@ -79,28 +79,80 @@ impl OpenLoop {
     }
 }
 
-const MAX_DEPTH: usize = 3;
 const SKIP_DIRS: [&str; 2] = ["node_modules", "target"];
 
-/// Walks roots up to MAX_DEPTH looking for directories with .git.
-///
-/// Hidden directories (name starts with `.`) and those listed in `SKIP_DIRS`
-/// are skipped.
-pub fn find_repos(roots: &[PathBuf]) -> Vec<PathBuf> {
-    let mut repos = Vec::new();
-    for root in roots {
-        walk(root, 0, &mut repos);
-    }
-    repos.sort();
-    repos
+fn looks_like_bare(dir: &Path) -> bool {
+    dir.join("HEAD").is_file() && dir.join("objects").is_dir() && dir.join("refs").is_dir()
 }
 
-fn walk(dir: &Path, depth: usize, repos: &mut Vec<PathBuf>) {
-    if dir.join(".git").is_dir() {
-        repos.push(dir.to_path_buf());
+fn is_repo_candidate(dir: &Path) -> bool {
+    dir.join(".git").exists() || looks_like_bare(dir)
+}
+
+/// Derives a stable repo name from the absolute git common-dir (§5 of Spec Fase A).
+pub fn repo_name_from_common_dir(common_dir: &Path) -> String {
+    let base = common_dir
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    if base == ".git" || base == ".bare" {
+        return common_dir
+            .parent()
+            .and_then(|p| p.file_name())
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or(base);
+    }
+    base.strip_suffix(".git").map(str::to_owned).unwrap_or(base)
+}
+
+/// Absolute path of the git common-dir for `path` (bare store / `.git` dir).
+///
+/// # Errors
+///
+/// Returns `Err` when `path` is not inside a git repository.
+pub fn git_common_dir(path: &Path) -> Result<PathBuf> {
+    let raw = git(
+        path,
+        &["rev-parse", "--path-format=absolute", "--git-common-dir"],
+    )?;
+    Ok(PathBuf::from(raw))
+}
+
+/// Walks roots up to `scan_depth` looking for git repo candidates, then
+/// deduplicates by absolute `--git-common-dir`.
+pub fn find_repos(roots: &[PathBuf], scan_depth: usize) -> (Vec<PathBuf>, Vec<String>) {
+    let mut candidates = Vec::new();
+    for root in roots {
+        walk(root, 0, scan_depth, &mut candidates);
+    }
+    dedup_candidates(candidates)
+}
+
+fn dedup_candidates(candidates: Vec<PathBuf>) -> (Vec<PathBuf>, Vec<String>) {
+    use std::collections::HashMap;
+    let mut by_common: HashMap<PathBuf, PathBuf> = HashMap::new();
+    let mut warnings = Vec::new();
+    for candidate in candidates {
+        match git_common_dir(&candidate) {
+            Ok(common) => {
+                by_common.entry(common).or_insert(candidate);
+            }
+            Err(e) => {
+                warnings.push(format!("{}: {e:#}", candidate.display()));
+            }
+        }
+    }
+    let mut repos: Vec<PathBuf> = by_common.into_values().collect();
+    repos.sort();
+    (repos, warnings)
+}
+
+fn walk(dir: &Path, depth: usize, scan_depth: usize, candidates: &mut Vec<PathBuf>) {
+    if is_repo_candidate(dir) {
+        candidates.push(dir.to_path_buf());
         return;
     }
-    if depth >= MAX_DEPTH {
+    if depth >= scan_depth {
         return;
     }
     let Ok(entries) = std::fs::read_dir(dir) else {
@@ -113,7 +165,7 @@ fn walk(dir: &Path, depth: usize, repos: &mut Vec<PathBuf>) {
         if !path.is_dir() || name.starts_with('.') || SKIP_DIRS.contains(&name.as_ref()) {
             continue;
         }
-        walk(&path, depth + 1, repos);
+        walk(&path, depth + 1, scan_depth, candidates);
     }
 }
 
@@ -124,6 +176,8 @@ fn walk(dir: &Path, depth: usize, repos: &mut Vec<PathBuf>) {
 /// Returns `Err` if git fails or if the default branch is not found.
 pub fn open_loops(repo: &Path, root_label: &str) -> Result<Vec<OpenLoop>> {
     let default = default_branch(repo)?;
+    let common_dir = git_common_dir(repo)?;
+    let repo_name = repo_name_from_common_dir(&common_dir);
     let merged: std::collections::HashSet<String> = git(
         repo,
         &["branch", "--merged", &default, "--format=%(refname:short)"],
@@ -131,10 +185,6 @@ pub fn open_loops(repo: &Path, root_label: &str) -> Result<Vec<OpenLoop>> {
     .lines()
     .map(|s| s.trim().to_string())
     .collect();
-    let repo_name = repo
-        .file_name()
-        .map(|n| n.to_string_lossy().into_owned())
-        .unwrap_or_else(|| repo.display().to_string());
     let raw = git(
         repo,
         &[
@@ -186,8 +236,12 @@ pub fn open_loops(repo: &Path, root_label: &str) -> Result<Vec<OpenLoop>> {
 /// Scans all repos found under the roots in parallel.
 ///
 /// Individual repo failures become warnings and never abort the scan.
-pub fn scan(roots: &[PathBuf], labels: &[(PathBuf, String)]) -> (Vec<OpenLoop>, Vec<String>) {
-    let repos = find_repos(roots);
+pub fn scan(
+    roots: &[PathBuf],
+    labels: &[(PathBuf, String)],
+    scan_depth: usize,
+) -> (Vec<OpenLoop>, Vec<String>) {
+    let (repos, mut warnings) = find_repos(roots, scan_depth);
     let results: Vec<Result<Vec<OpenLoop>>> = std::thread::scope(|s| {
         let handles: Vec<_> = repos
             .iter()
@@ -205,7 +259,6 @@ pub fn scan(roots: &[PathBuf], labels: &[(PathBuf, String)]) -> (Vec<OpenLoop>, 
             .collect()
     });
     let mut all = Vec::new();
-    let mut warnings = Vec::new();
     for (repo, res) in repos.iter().zip(results) {
         match res {
             Ok(mut loops) => all.append(&mut loops),
@@ -294,19 +347,101 @@ mod tests {
     }
 
     #[test]
-    fn find_repos_finds_repos_up_to_depth_3_and_skips_hidden() {
+    fn find_repos_dedups_container_and_worktrees() {
         let tmp = tempfile::tempdir().unwrap();
-        testutil::init_repo(&tmp.path().join("a/b/repo1"));
-        testutil::init_repo(&tmp.path().join("repo2"));
+        let container = tmp.path().join("my-app");
+        testutil::init_bare_worktree_container(&container);
+        let dev = container.join("dev");
+        testutil::add_named_worktree(&container, "dev", "dev");
+        let (repos, warnings) = find_repos(&[container.clone(), dev], 4);
+        assert!(warnings.is_empty(), "unexpected warnings: {warnings:?}");
+        assert_eq!(repos.len(), 1);
+        assert_eq!(repos[0], container);
+    }
+
+    #[test]
+    fn find_repos_respects_scan_depth_and_skips_hidden() {
+        let tmp = tempfile::tempdir().unwrap();
+        testutil::init_repo(&tmp.path().join("a/b/c/repo-deep"));
+        testutil::init_repo(&tmp.path().join("a/b/repo-mid"));
+        testutil::init_repo(&tmp.path().join("repo-shallow"));
         testutil::init_repo(&tmp.path().join(".hidden/repo3"));
-        let repos = find_repos(&[tmp.path().to_path_buf()]);
+
+        let (repos, _) = find_repos(&[tmp.path().to_path_buf()], 4);
         let names: Vec<_> = repos
             .iter()
-            .map(|r| r.file_name().unwrap().to_string_lossy().into_owned())
+            .filter_map(|r| r.file_name())
+            .map(|n| n.to_string_lossy().into_owned())
             .collect();
-        assert!(names.contains(&"repo1".to_string()));
-        assert!(names.contains(&"repo2".to_string()));
+        assert!(names.contains(&"repo-deep".to_string()));
+        assert!(names.contains(&"repo-mid".to_string()));
+        assert!(names.contains(&"repo-shallow".to_string()));
         assert!(!names.contains(&"repo3".to_string()));
+
+        let (shallow, _) = find_repos(&[tmp.path().to_path_buf()], 2);
+        let shallow_names: Vec<_> = shallow
+            .iter()
+            .filter_map(|r| r.file_name())
+            .map(|n| n.to_string_lossy().into_owned())
+            .collect();
+        assert!(!shallow_names.contains(&"repo-deep".to_string()));
+        assert!(shallow_names.contains(&"repo-shallow".to_string()));
+    }
+
+    #[test]
+    fn find_repos_finds_normal_git_dir_repo() {
+        let tmp = tempfile::tempdir().unwrap();
+        testutil::init_repo(&tmp.path().join("app"));
+        let (repos, _) = find_repos(&[tmp.path().to_path_buf()], 4);
+        assert_eq!(repos.len(), 1);
+    }
+
+    #[test]
+    fn find_repos_finds_bare_worktree_container_via_git_file() {
+        let tmp = tempfile::tempdir().unwrap();
+        let container = tmp.path().join("my-app");
+        testutil::init_bare_worktree_container(&container);
+        let (repos, _) = find_repos(&[tmp.path().to_path_buf()], 4);
+        assert_eq!(repos.len(), 1);
+        assert_eq!(repos[0], container);
+    }
+
+    #[test]
+    fn find_repos_finds_pure_bare_repo() {
+        let tmp = tempfile::tempdir().unwrap();
+        let bare = tmp.path().join("foo.git");
+        testutil::init_bare_repo(&bare);
+        testutil::seed_bare_main(&bare);
+        let (repos, _) = find_repos(&[tmp.path().to_path_buf()], 4);
+        assert_eq!(repos.len(), 1);
+        assert_eq!(repos[0], bare);
+    }
+
+    #[test]
+    fn open_loops_uses_common_dir_repo_name_in_bare_layout() {
+        let tmp = tempfile::tempdir().unwrap();
+        let container = tmp.path().join("my-app");
+        testutil::init_bare_worktree_container(&container);
+        testutil::add_named_worktree(&container, "dev", "dev");
+        testutil::add_branch_on_bare(&container.join(".bare"), "feat/x", "x.txt");
+
+        let loops = open_loops(&container, "root").unwrap();
+        assert_eq!(loops.len(), 1);
+        assert_eq!(loops[0].repo_name, "my-app");
+        assert_eq!(loops[0].branch, "feat/x");
+        assert_eq!(loops[0].key(), "root/my-app/feat/x");
+    }
+
+    #[test]
+    fn open_loops_bare_root_repo_name_strips_dot_git_suffix() {
+        let tmp = tempfile::tempdir().unwrap();
+        let bare = tmp.path().join("foo.git");
+        testutil::init_bare_repo(&bare);
+        testutil::seed_bare_main(&bare);
+        testutil::add_branch_on_bare(&bare, "feat/y", "y.txt");
+
+        let loops = open_loops(&bare, "r").unwrap();
+        assert_eq!(loops[0].repo_name, "foo");
     }
 
     #[test]
@@ -341,7 +476,7 @@ mod tests {
         testutil::git(&empty, &["init", "-b", "main"]);
 
         let labels = vec![(tmp.path().to_path_buf(), "r".to_string())];
-        let (loops, warnings) = scan(&[tmp.path().to_path_buf()], &labels);
+        let (loops, warnings) = scan(&[tmp.path().to_path_buf()], &labels, 4);
         assert_eq!(loops.len(), 1);
         assert_eq!(loops[0].key(), "r/good/feat/ok");
         assert_eq!(warnings.len(), 1);
@@ -382,5 +517,38 @@ mod tests {
         // no commits: refs/heads/main and refs/heads/master do not exist
         let err = default_branch(repo).unwrap_err();
         assert!(err.to_string().contains("couldn't find the default branch"));
+    }
+
+    #[test]
+    fn git_common_dir_resolves_normal_and_bare_pointer() {
+        let tmp = tempfile::tempdir().unwrap();
+        let normal = tmp.path().join("app");
+        testutil::init_repo(&normal);
+        let normal_common = git_common_dir(&normal).unwrap();
+        assert!(normal_common.ends_with(".git"));
+
+        let container = tmp.path().join("container");
+        testutil::init_bare_worktree_container(&container);
+        let bare_common = git_common_dir(&container).unwrap();
+        assert!(bare_common.ends_with(".bare"));
+    }
+
+    #[test]
+    fn repo_name_from_common_dir_table() {
+        use std::path::Path;
+
+        let cases: &[(&str, &str)] = &[
+            ("/home/u/my-app/.bare", "my-app"),
+            ("/home/u/app/.git", "app"),
+            ("/srv/git/foo.git", "foo"),
+            ("/srv/git/myproject", "myproject"),
+        ];
+        for (common, want) in cases {
+            assert_eq!(
+                repo_name_from_common_dir(Path::new(common)),
+                *want,
+                "common_dir={common}"
+            );
+        }
     }
 }

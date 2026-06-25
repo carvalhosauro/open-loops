@@ -407,3 +407,38 @@ fn list_filters_by_query_term() {
         .stdout(predicate::str::contains("projects/api/feat/x"))
         .stdout(predicate::str::contains("web/feat/x").not());
 }
+
+#[test]
+fn list_finds_branches_in_bare_worktree_layout() {
+    let tmp = tempfile::tempdir().unwrap();
+    let home = tmp.path().join("home");
+    let root = tmp.path().join("projects");
+    let container = root.join("my-app");
+    std::fs::create_dir_all(&container).unwrap();
+
+    // inline git setup (tests/cli.rs has its own git helper)
+    let bare = container.join(".bare");
+    std::fs::create_dir_all(&bare).unwrap();
+    git(&bare, &["init", "--bare", "-b", "main"]);
+    std::fs::write(container.join(".git"), "gitdir: ./.bare\n").unwrap();
+    let main = container.join("main");
+    git(
+        &container,
+        &["worktree", "add", "-b", "main", main.to_str().unwrap()],
+    );
+    std::fs::write(main.join("a.txt"), "a").unwrap();
+    git(&main, &["add", "."]);
+    git(&main, &["commit", "-m", "init"]);
+    git(&main, &["checkout", "-b", "feat/login"]);
+    std::fs::write(main.join("b.txt"), "b").unwrap();
+    git(&main, &["add", "."]);
+    git(&main, &["commit", "-m", "feat"]);
+    git(&main, &["checkout", "main"]);
+
+    loops(&home).arg("init").arg(&root).assert().success();
+
+    loops(&home)
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("my-app/feat/login"));
+}

@@ -165,8 +165,8 @@ pub fn worktrees(repo: &Path) -> Result<Vec<Worktree>> {
 /// Scans worktrees of all repos found under the roots, in parallel.
 ///
 /// Per-repo failures become warnings, never abort.
-pub fn scan_worktrees(roots: &[PathBuf]) -> (Vec<Worktree>, Vec<String>) {
-    let repos = find_repos(roots);
+pub fn scan_worktrees(roots: &[PathBuf], scan_depth: usize) -> (Vec<Worktree>, Vec<String>) {
+    let (repos, mut warnings) = find_repos(roots, scan_depth);
     let results: Vec<Result<Vec<Worktree>>> = std::thread::scope(|s| {
         let handles: Vec<_> = repos
             .iter()
@@ -181,7 +181,6 @@ pub fn scan_worktrees(roots: &[PathBuf]) -> (Vec<Worktree>, Vec<String>) {
             .collect()
     });
     let mut all = Vec::new();
-    let mut warnings = Vec::new();
     for (repo, res) in repos.iter().zip(results) {
         match res {
             Ok(mut w) => all.append(&mut w),
@@ -301,7 +300,7 @@ mod tests {
         let extra = tmp.path().join("wt-extra");
         testutil::add_worktree(&repo, &extra, "feat/extra");
 
-        let (all, warnings) = scan_worktrees(&[tmp.path().to_path_buf()]);
+        let (all, warnings) = scan_worktrees(&[tmp.path().to_path_buf()], 4);
         assert!(all
             .iter()
             .any(|w| w.branch.as_deref() == Some("feat/extra")));
