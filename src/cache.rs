@@ -21,6 +21,7 @@ impl Cache {
         // branches contain '/', which cannot appear in a file name
         let branch = lp.branch.replace('/', "__");
         self.dir
+            .join(&lp.root_label)
             .join(&lp.repo_name)
             .join(format!("{branch}@{}.md", lp.head_sha))
     }
@@ -82,5 +83,17 @@ mod tests {
         let cache = Cache::new(tmp.path());
         cache.put(&fake_loop("old-sha"), "old").unwrap();
         assert!(cache.get(&fake_loop("new-sha")).is_none());
+    }
+
+    #[test]
+    fn path_includes_root_label_segment() {
+        let tmp = tempfile::tempdir().unwrap();
+        let cache = Cache::new(tmp.path());
+        let lp = fake_loop("sha1");
+        cache.put(&lp, "x").unwrap();
+        // distinct labels for the same repo/branch must not collide
+        let mut other = fake_loop("sha1");
+        other.root_label = "personal".into();
+        assert!(cache.get(&other).is_none());
     }
 }
