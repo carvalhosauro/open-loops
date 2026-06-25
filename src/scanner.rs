@@ -236,8 +236,12 @@ pub fn open_loops(repo: &Path, root_label: &str) -> Result<Vec<OpenLoop>> {
 /// Scans all repos found under the roots in parallel.
 ///
 /// Individual repo failures become warnings and never abort the scan.
-pub fn scan(roots: &[PathBuf], labels: &[(PathBuf, String)]) -> (Vec<OpenLoop>, Vec<String>) {
-    let (repos, mut warnings) = find_repos(roots, 4);
+pub fn scan(
+    roots: &[PathBuf],
+    labels: &[(PathBuf, String)],
+    scan_depth: usize,
+) -> (Vec<OpenLoop>, Vec<String>) {
+    let (repos, mut warnings) = find_repos(roots, scan_depth);
     let results: Vec<Result<Vec<OpenLoop>>> = std::thread::scope(|s| {
         let handles: Vec<_> = repos
             .iter()
@@ -443,7 +447,7 @@ mod tests {
         testutil::git(&empty, &["init", "-b", "main"]);
 
         let labels = vec![(tmp.path().to_path_buf(), "r".to_string())];
-        let (loops, warnings) = scan(&[tmp.path().to_path_buf()], &labels);
+        let (loops, warnings) = scan(&[tmp.path().to_path_buf()], &labels, 4);
         assert_eq!(loops.len(), 1);
         assert_eq!(loops[0].key(), "r/good/feat/ok");
         assert_eq!(warnings.len(), 1);
