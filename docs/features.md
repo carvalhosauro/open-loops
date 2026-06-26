@@ -16,6 +16,14 @@ Discovery is layout-agnostic: normal repos, worktrees, and bare stores under you
 configured roots are found automatically. Repo names come from git's common-dir,
 not from worktree folder names.
 
+Ahead/behind counts are memoised in `~/.open-loops/inventory/` by
+`(branch, head_sha, default_sha)`. Repeated runs skip `rev-list` for unchanged
+branches, making the second call noticeably faster on large repos.
+
+```bash
+loops --fresh             # bypass memo and recompute all ahead/behind
+```
+
 ### Filtering
 
 ```bash
@@ -30,11 +38,24 @@ Attributes: `repo:`, `branch:`, `key:`, `root:` (substring), `idle:` (needs a
 comparator, e.g. `idle:>7d`; units m/h/d/w), `ahead:`/`behind:` (`>`,`<`,`>=`,
 `<=`, or bare equality). Tags: `-ignored` (default), `+ignored`.
 
+## `loops refresh [query]` — reindex inventory
+
+```bash
+loops refresh             # reindex all repos
+loops refresh api         # reindex repos matching "api"
+```
+
+Forces a full recomputation of ahead/behind for all (or filtered) repos, writes
+the updated inventory, and removes files for repos that have been deleted or
+moved (`~/.open-loops/inventory/<hash>.json`). Prints `refreshed N repos` on
+stderr when complete.
+
 ## `loops resume <query>` — context resumption
 
 ```bash
 loops resume feat/login
 loops resume feat/login --dry-run   # audit evidence without calling the LLM
+loops resume feat/login --fresh     # bypass inventory memo
 ```
 
 The query matches by substring against `repo/branch`. Progress on stderr:

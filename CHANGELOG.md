@@ -1,6 +1,19 @@
 # Changelog
 ## unreleased
 
+### Features
+- `inventory.rs`: SHA-validated ahead/behind memo store at `~/.open-loops/inventory/<fnv64hex>.json`
+- `loops --fresh`: bypass inventory memo and recompute ahead/behind from git
+- `loops refresh [query]`: full reindex with lazy orphan cleanup
+- `inventory_ttl_secs` config option (default 0 = SHA-only validation)
+- Write-through on every scan including filtered queries (`loops api`)
+- Atomic inventory writes (tmp + rename) for concurrent-safe operation
+
+### Internals
+- `ScanOptions` struct threads inventory context through scanner
+- `scan()` returns inventory updates for CLI-side write-through
+- FNV-1a 64-bit hex hash of common-dir path (no new crate dependency)
+
 ## 1.2.0 - 2026-06-26
 
 ### Docs

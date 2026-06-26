@@ -12,6 +12,7 @@ Override the base directory: `OPEN_LOOPS_HOME` environment variable.
 | `max_sessions` | integer | `3` | Sessions used per distillation |
 | `max_session_kb` | integer | `50` | KB read from the end of each session |
 | `aliases` | table | `{}` | Per-root label override, keyed by canonical root path (resolves key collisions) |
+| `inventory_ttl_secs` | integer | `0` | Seconds before a cached ahead/behind entry expires; `0` = SHA-only validation, no time-based expiry |
 
 ## Repository discovery
 
@@ -100,7 +101,25 @@ own (safe to delete `~/.open-loops/cache/`).
 
 ```
 ~/.open-loops/
-├── config.toml    # this configuration
-├── ignores.toml   # loops dismissed via `loops ignore`
-└── cache/         # distillations per repo/branch@sha (safe to delete)
+├── config.toml        # this configuration
+├── ignores.toml       # loops dismissed via `loops ignore`
+├── cache/             # distillations per repo/branch@sha (safe to delete)
+└── inventory/         # ahead/behind memo per repo (safe to delete)
 ```
+
+### Inventory cache
+
+`loops` memoises the expensive `rev-list` (ahead/behind) computation for each
+unmerged branch in `inventory/<fnv64hex>.json`, keyed by `(branch, head_sha,
+default_sha)`. The light git phase (branch list, last-commit date) always runs
+fresh; only ahead/behind is cached.
+
+Use `--inventory_ttl_secs` to add a time-based expiry on top of SHA
+validation (default 0 = SHA-only):
+
+```toml
+inventory_ttl_secs = 3600   # re-run rev-list after 1 hour even if SHAs match
+```
+
+Use `loops --fresh` to bypass the memo for a single invocation, or
+`loops refresh` to force a full reindex.
