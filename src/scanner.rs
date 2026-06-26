@@ -659,6 +659,42 @@ mod tests {
     }
 
     #[test]
+    fn scan_repo_filter_is_case_insensitive() {
+        let tmp = tempfile::tempdir().unwrap();
+        let api = tmp.path().join("API-Service");
+        testutil::init_repo(&api);
+        testutil::add_branch_with_commit(&api, "feat/api", "a.txt");
+
+        let labels = vec![(tmp.path().to_path_buf(), "r".to_string())];
+        // lowercase filter must match a mixed-case repo dir (both sides lowered)
+        let (loops, _) = scan(&[tmp.path().to_path_buf()], &labels, 4, false, Some("api"));
+        assert_eq!(loops.len(), 1);
+        assert_eq!(loops[0].repo_name, "API-Service");
+    }
+
+    #[test]
+    fn scan_repo_filter_matching_nothing_yields_no_loops() {
+        let tmp = tempfile::tempdir().unwrap();
+        let api = tmp.path().join("api-service");
+        testutil::init_repo(&api);
+        testutil::add_branch_with_commit(&api, "feat/api", "a.txt");
+
+        let labels = vec![(tmp.path().to_path_buf(), "r".to_string())];
+        let (loops, warnings) = scan(
+            &[tmp.path().to_path_buf()],
+            &labels,
+            4,
+            false,
+            Some("zzz-nope"),
+        );
+        assert!(loops.is_empty());
+        assert!(
+            warnings.is_empty(),
+            "filtered-out repos must not warn: {warnings:?}"
+        );
+    }
+
+    #[test]
     fn scan_aggregates_repos_and_reports_warning_without_aborting() {
         let tmp = tempfile::tempdir().unwrap();
         let good = tmp.path().join("good");

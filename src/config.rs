@@ -406,6 +406,20 @@ mod tests {
     }
 
     #[test]
+    fn expand_tilde_handles_prefix_bare_and_literal() {
+        let home = dirs::home_dir().expect("home dir");
+        assert_eq!(expand_tilde("~/work"), home.join("work"));
+        assert_eq!(expand_tilde("~"), home);
+        // no leading tilde → returned verbatim, never touches $HOME
+        assert_eq!(
+            expand_tilde("/abs/path"),
+            std::path::PathBuf::from("/abs/path")
+        );
+        // a tilde mid-string is NOT a home marker
+        assert_eq!(expand_tilde("a~b"), std::path::PathBuf::from("a~b"));
+    }
+
+    #[test]
     fn resolve_labels_errors_on_collision_without_alias() {
         let tmp = tempfile::tempdir().unwrap();
         let a = tmp.path().join("a/repos");
