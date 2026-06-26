@@ -13,7 +13,7 @@ pub struct ClaudeCode {
 /// Claude Code encodes the project path by replacing path separators and '.' with '-'.
 /// e.g. /home/g/repo/x -> -home-g-repo-x, C:\Users\g\app -> C--Users-g-app
 pub fn encode_project_path(p: &Path) -> String {
-    p.to_string_lossy().replace(['/', '\\', '.'], "-")
+    p.to_string_lossy().replace(['/', '\\', '.', ':'], "-")
 }
 
 /// Extracts text from a session jsonl line. None for non-message,
