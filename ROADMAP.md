@@ -149,17 +149,17 @@ Depende de: —
 - [x] README badges (CI, crates.io, MSRV, license)
 - [x] ADR `0006-ci-msrv-cross-os.md`
 
-### ⬜ WAVE 2/3 — artefato de release + automação  ·  [Spec](docs/superpowers/specs/2026-06-26-release-completeness-automation-design.md)
+### ✅ WAVE 2/3 — artefato de release + automação  ·  [Spec](docs/superpowers/specs/2026-06-26-release-completeness-automation-design.md)
 
 Depende de: **WAVE 1**
 
-- [ ] `build.rs`: completions (4 shells) + man page (`clap_mangen`)
-- [ ] `dist-workspace.toml`: empacota artefatos gerados + LICENSE/README/CHANGELOG no tarball
-- [ ] `Cargo.toml`: metadados crates.io (`rust-version`, `categories`, …) + `[profile.release]`
-- [ ] `release-plz.toml` + `.github/workflows/release-plz.yml` (PAT `RELEASE_PLZ_TOKEN`)
-- [ ] deletar `publish-crate.yml` (crates.io via release-plz)
-- [ ] release patch ponta-a-ponta: merge Release PR → tag → `release.yml` (cargo-dist)
-- [ ] ADR `0007-release-plz-cargo-dist-split.md`
+- [x] `build.rs`: completions (4 shells) + man page (`clap_mangen`)
+- [x] `dist-workspace.toml`: empacota artefatos gerados + LICENSE/README/CHANGELOG no tarball
+- [x] `Cargo.toml`: metadados crates.io (`rust-version`, `categories`, …) + `[profile.release]`
+- [x] `release-plz.toml` + `.github/workflows/release-plz.yml` (PAT `RELEASE_PLZ_TOKEN`)
+- [x] deletar `publish-crate.yml` (crates.io via release-plz)
+- [ ] release patch ponta-a-ponta: merge Release PR → tag → `release.yml` (infra pronta; validar após configurar `RELEASE_PLZ_TOKEN` e merge do primeiro Release PR)
+- [x] ADR `0007-release-plz-cargo-dist-split.md`
 
 ### ⬜ WAVE 4 — maturidade da lib + saúde OSS  ·  [Spec](docs/superpowers/specs/2026-06-26-library-maturity-oss-health-design.md)
 

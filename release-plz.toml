@@ -1,5 +1,13 @@
+[workspace]
+publish = true
+git_release_enable = false
+git_tag_name = "v{{ version }}"
+changelog_update = true
+
+# Mirrored from cliff.toml — release-plz does not read cliff.toml (deprecated
+# changelog_config). Keep both in sync when changing commit grouping or templates.
+# cliff.toml remains for local `just changelog` preview.
 [changelog]
-# Keep in sync with release-plz.toml [changelog] — release-plz does not read this file.
 header = "# Changelog\n"
 body = """
 ## {{ version | default(value="unreleased") }}{% if timestamp %} - {{ timestamp | date(format="%Y-%m-%d") }}{% endif %}
@@ -8,9 +16,6 @@ body = """
 {% for commit in commits %}- {{ commit.message | upper_first }}
 {% endfor %}{% endfor %}
 """
-
-[git]
-conventional_commits = true
 commit_parsers = [
   { message = "^feat", group = "Features" },
   { message = "^fix", group = "Fixes" },

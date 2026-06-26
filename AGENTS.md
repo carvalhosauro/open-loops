@@ -35,14 +35,18 @@ CI runs on ubuntu/macos/windows; MSRV 1.89 enforced by dedicated `msrv` job.
 
 ## Release
 
+Merge the **Release PR** that release-plz opens on `main` (version bump +
+`CHANGELOG.md`). On merge, release-plz publishes to crates.io and pushes tag
+`vX.Y.Z` via `RELEASE_PLZ_TOKEN`; the tag triggers `release.yml` (cargo-dist:
+binaries, Homebrew tap, GitHub Release).
+
 ```bash
-just changelog                      # atualiza CHANGELOG.md
-git add CHANGELOG.md && git commit -m "docs: update changelog"
-git tag v0.1.0 && git push --tags   # CI: binários, Homebrew tap, crates.io
+just changelog   # local preview only (git-cliff); release changelog is updated by release-plz
 ```
 
-Secrets (one-time): `CARGO_REGISTRY_TOKEN`, `HOMEBREW_TAP_TOKEN`. Tap repo:
-`carvalhosauro/homebrew-tap`. Checklist: `docs/distribution.md`.
+Secrets (one-time): `RELEASE_PLZ_TOKEN` (PAT: Contents + PR write), `CARGO_REGISTRY_TOKEN`,
+`HOMEBREW_TAP_TOKEN`. Tap repo: `carvalhosauro/homebrew-tap`. Checklist:
+`docs/distribution.md`. ADR: `docs/decisions/0007-release-plz-cargo-dist-split.md`.
 
 ## Cursor Cloud specific instructions
 
