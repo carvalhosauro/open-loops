@@ -2,8 +2,13 @@
 name = "open-loops"
 version = "1.1.2"
 edition = "2021"
+rust-version = "1.89"
+authors = ["Gustavo Carvalho <gustavoooliveiradecarvalho@gmail.com>"]
 license = "MIT OR Apache-2.0"
 description = "Recupere o contexto de trabalhos pausados: o que começou, onde parou, qual o próximo passo"
+readme = "README.md"
+categories = ["command-line-utilities", "development-tools"]
+keywords = ["git", "worktree", "context", "ai", "agents"]
 repository = "https://github.com/carvalhosauro/open-loops"
 homepage = "https://github.com/carvalhosauro/open-loops"
 
@@ -34,6 +39,10 @@ tempfile = "3"
 clap = { version = "4", features = ["derive"] }
 clap_complete = "4"
 clap_mangen = "0.2"
+
+[profile.release]
+lto = "thin"
+strip = true
 
 # The profile that 'dist' will build with
 [profile.dist]
