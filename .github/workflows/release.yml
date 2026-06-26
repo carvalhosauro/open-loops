@@ -290,25 +290,40 @@ jobs:
       GITHUB_EMAIL: "admin+bot@axo.dev"
     if: ${{ !fromJson(needs.plan.outputs.val).announcement_is_prerelease || fromJson(needs.plan.outputs.val).publish_prereleases }}
     steps:
-      - uses: actions/checkout@v6
-        with:
-          persist-credentials: true
-          repository: "carvalhosauro/homebrew-tap"
-          token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+      # actions/checkout fails on a brand-new tap (no commits → no main ref yet).
+      - name: Checkout or initialize tap
+        env:
+          TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+        run: |
+          REPO="https://x-access-token:${TAP_TOKEN}@github.com/carvalhosauro/homebrew-tap.git"
+          git config --global user.name "${GITHUB_USER}"
+          git config --global user.email "${GITHUB_EMAIL}"
+
+          if git ls-remote "$REPO" refs/heads/main 2>/dev/null | grep -q refs/heads/main; then
+            git clone --depth 1 --branch main "$REPO" tap
+          else
+            mkdir tap
+            cd tap
+            git init -b main
+            git remote add origin "$REPO"
+            mkdir -p Formula
+            printf '%s\n' '# Homebrew tap for open-loops' > README.md
+            git add README.md Formula
+            git commit -m "chore: initialize tap"
+            git push -u origin main
+          fi
       # So we have access to the formula
       - name: Fetch homebrew formulae
         uses: actions/download-artifact@v8
         with:
           pattern: artifacts-*
-          path: Formula/
+          path: tap/Formula/
           merge-multiple: true
       # This is extra complex because you can make your Formula name not match your app name
       # so we need to find releases with a *.rb file, and publish with that filename.
       - name: Commit formula files
+        working-directory: tap
         run: |
-          git config --global user.name "${GITHUB_USER}"
-          git config --global user.email "${GITHUB_EMAIL}"
-
           for release in $(echo "$PLAN" | jq --compact-output '.releases[] | select([.artifacts[] | endswith(".rb")] | any)'); do
             filename=$(echo "$release" | jq '.artifacts[] | select(endswith(".rb"))' --raw-output)
             name=$(echo "$filename" | sed "s/\.rb$//")
