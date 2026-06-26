@@ -187,7 +187,11 @@ fn session_match_tags(e: &SessionExcerpt) -> String {
 }
 
 fn format_ab(ahead: Option<u32>, behind: Option<u32>) -> String {
-    format!("{}, behind: {}", output::fmt_count(ahead), output::fmt_count(behind))
+    format!(
+        "{}, behind: {}",
+        output::fmt_count(ahead),
+        output::fmt_count(behind)
+    )
 }
 
 /// Shows git and session evidence that would feed distillation, without calling the LLM.

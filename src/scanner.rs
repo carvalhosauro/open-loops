@@ -206,12 +206,10 @@ fn dedup_candidates(candidates: Vec<PathBuf>) -> (Vec<RepoCandidate>, Vec<String
         match git_common_dir(&candidate) {
             Ok(common) => {
                 let repo_name = repo_name_from_common_dir(&common);
-                by_common
-                    .entry(common)
-                    .or_insert(RepoCandidate {
-                        path: candidate,
-                        repo_name,
-                    });
+                by_common.entry(common).or_insert(RepoCandidate {
+                    path: candidate,
+                    repo_name,
+                });
             }
             Err(e) => {
                 warnings.push(format!("{}: {e:#}", candidate.display()));
