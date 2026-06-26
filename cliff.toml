@@ -1,4 +1,5 @@
 [changelog]
+# Keep in sync with release-plz.toml [changelog] — release-plz does not read this file.
 header = "# Changelog\n"
 body = """
 ## {{ version | default(value="unreleased") }}{% if timestamp %} - {{ timestamp | date(format="%Y-%m-%d") }}{% endif %}

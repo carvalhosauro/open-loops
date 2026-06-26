@@ -42,3 +42,8 @@ merge Release PR → main
   release-plz when the Release PR merges.
 - First end-to-end patch release after merge validates the PAT → tag → cargo-dist
   handoff.
+- **Archive vs installer:** WAVE 2 puts completions and `loops.1` in the release
+  tarball (`dist-artifacts/`). cargo-dist 0.32 does not yet wire them into the
+  Homebrew formula or shell installer paths (upstream limitation). Users who
+  install from the archive can copy files manually; `loops completions` remains
+  the local generation path.
