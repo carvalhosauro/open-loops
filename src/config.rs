@@ -111,18 +111,40 @@ impl Config {
                 prefix = canon;
             }
         }
-        let prefix_str = prefix.to_string_lossy();
         let needle = filter.to_lowercase();
         Ok(labels
             .into_iter()
-            .filter(|(root, label)| {
-                root.starts_with(prefix_str.as_ref())
-                    || label.to_lowercase().contains(&needle)
-                    || root.to_string_lossy().to_lowercase().contains(&needle)
-            })
+            .filter(|(root, label)| root_matches_filter(root, label, filter, &needle, &prefix))
             .map(|(root, _)| root)
             .collect())
     }
+}
+
+/// True when `root`/`label` match a `root:` filter (ADR 0003).
+fn root_matches_filter(
+    root: &std::path::Path,
+    label: &str,
+    filter: &str,
+    needle: &str,
+    prefix: &std::path::Path,
+) -> bool {
+    // Canonical path prefix after tilde-expand (e.g. root:~/work).
+    if root.starts_with(prefix) {
+        return true;
+    }
+    // Alias shortcut (e.g. root:w) — exact label, not substring (avoids "w" ⊂ "personal").
+    if label.eq_ignore_ascii_case(filter) {
+        return true;
+    }
+    // Path component / suffix (e.g. root:personal) — basename only, not the full temp path.
+    if root
+        .file_name()
+        .is_some_and(|n| n.to_string_lossy().to_lowercase().contains(needle))
+    {
+        return true;
+    }
+    let root_str = root.to_string_lossy().to_lowercase();
+    root_str.ends_with(needle) || root_str.contains(&format!("/{needle}"))
 }
 
 /// Expands a leading `~` to the home directory (ADR `root:` filter).
@@ -314,6 +336,28 @@ mod tests {
             .resolve_scan_roots(&crate::query::parse("root:personal").unwrap())
             .unwrap();
         assert_eq!(by_path, vec![personal]);
+    }
+
+    #[test]
+    fn resolve_scan_roots_short_alias_does_not_match_unrelated_path_noise() {
+        // Temp dirs like `.tmp02Wc68` contain the letter 'w'; a loose full-path
+        // substring match must not pull in every root when filtering root:w.
+        let tmp = tempfile::tempdir().unwrap();
+        let work = tmp.path().join("work");
+        let personal = tmp.path().join("personal");
+        std::fs::create_dir_all(&work).unwrap();
+        std::fs::create_dir_all(&personal).unwrap();
+        let mut cfg = Config {
+            roots: vec![work.clone(), personal.clone()],
+            ..Config::default()
+        };
+        cfg.aliases
+            .insert(work.to_string_lossy().into_owned(), "w".into());
+
+        let matched = cfg
+            .resolve_scan_roots(&crate::query::parse("root:w").unwrap())
+            .unwrap();
+        assert_eq!(matched, vec![work]);
     }
 
     #[test]
