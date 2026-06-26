@@ -10,6 +10,9 @@ installers = ["shell", "homebrew"]
 # Tap repo must exist before the first tagged release. See docs/distribution.md.
 tap = "carvalhosauro/homebrew-tap"
 publish-jobs = ["homebrew"]
+# release.yml initializes an empty tap repo before publishing, so keep the
+# intentional workflow customization while still letting dist plan run.
+allow-dirty = ["ci"]
 targets = [
   "aarch64-apple-darwin",
   "x86_64-apple-darwin",
