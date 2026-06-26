@@ -68,8 +68,8 @@ pub struct OpenLoop {
     pub branch: String,
     pub head_sha: String,
     pub last_commit: DateTime<Utc>,
-    pub ahead: u32,
-    pub behind: u32,
+    pub ahead: Option<u32>,
+    pub behind: Option<u32>,
 }
 
 impl OpenLoop {
@@ -231,12 +231,29 @@ fn walk(dir: &Path, depth: usize, scan_depth: usize, candidates: &mut Vec<PathBu
     }
 }
 
+/// Path-based repo name hint for push-down filtering before any git I/O.
+pub fn repo_name_hint(path: &Path) -> String {
+    let base = path
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    base.strip_suffix(".git").map(str::to_owned).unwrap_or(base)
+}
+
+fn matches_repo_filter(path: &Path, filter: &str) -> bool {
+    let hint = repo_name_hint(path);
+    hint.to_lowercase().contains(&filter.to_lowercase())
+}
+
 /// Returns all unmerged branches (except default) in a repo.
+///
+/// Light phase (default branch, merged set, for-each-ref) always runs. The heavy
+/// phase (`rev-list` for ahead/behind) runs only when `need_ahead_behind` is true.
 ///
 /// # Errors
 ///
 /// Returns `Err` if git fails or if the default branch is not found.
-pub fn open_loops(repo: &Path, root_label: &str) -> Result<Vec<OpenLoop>> {
+pub fn open_loops(repo: &Path, root_label: &str, need_ahead_behind: bool) -> Result<Vec<OpenLoop>> {
     let default = default_branch(repo)?;
     let common_dir = git_common_dir(repo)?;
     let repo_name = repo_name_from_common_dir(&common_dir);
@@ -273,18 +290,23 @@ pub fn open_loops(repo: &Path, root_label: &str) -> Result<Vec<OpenLoop>> {
         if branch == default || merged.contains(branch) {
             continue;
         }
-        let counts = git(
-            repo,
-            &[
-                "rev-list",
-                "--left-right",
-                "--count",
-                &format!("{default}...{branch}"),
-            ],
-        )?;
-        let mut c = counts.split_whitespace();
-        let behind: u32 = c.next().unwrap_or("0").parse().unwrap_or(0);
-        let ahead: u32 = c.next().unwrap_or("0").parse().unwrap_or(0);
+        let (ahead, behind) = if need_ahead_behind {
+            let counts = git(
+                repo,
+                &[
+                    "rev-list",
+                    "--left-right",
+                    "--count",
+                    &format!("{default}...{branch}"),
+                ],
+            )?;
+            let mut c = counts.split_whitespace();
+            let behind: u32 = c.next().unwrap_or("0").parse().unwrap_or(0);
+            let ahead: u32 = c.next().unwrap_or("0").parse().unwrap_or(0);
+            (Some(ahead), Some(behind))
+        } else {
+            (None, None)
+        };
         let last_commit = DateTime::parse_from_rfc3339(date)
             .with_context(|| format!("invalid date from git: {date}"))?
             .with_timezone(&Utc);
@@ -308,19 +330,26 @@ pub fn open_loops(repo: &Path, root_label: &str) -> Result<Vec<OpenLoop>> {
 
 /// Scans all repos found under the roots in parallel.
 ///
-/// Individual repo failures become warnings and never abort the scan.
+/// `repo_filter`, when set, retains only repos whose path-based name hint matches
+/// before any per-repo git work. Individual repo failures become warnings and
+/// never abort the scan.
 pub fn scan(
     roots: &[PathBuf],
     labels: &[(PathBuf, String)],
     scan_depth: usize,
+    need_ahead_behind: bool,
+    repo_filter: Option<&str>,
 ) -> (Vec<OpenLoop>, Vec<String>) {
-    let (repos, mut warnings) = find_repos(roots, scan_depth);
+    let (mut repos, mut warnings) = find_repos(roots, scan_depth);
+    if let Some(filter) = repo_filter {
+        repos.retain(|repo| matches_repo_filter(repo, filter));
+    }
     let results: Vec<Result<Vec<OpenLoop>>> = std::thread::scope(|s| {
         let handles: Vec<_> = repos
             .iter()
             .map(|repo| {
                 let label = crate::config::label_for_repo(labels, repo);
-                s.spawn(move || open_loops(repo, &label))
+                s.spawn(move || open_loops(repo, &label, need_ahead_behind))
             })
             .collect();
         handles
@@ -498,7 +527,7 @@ mod tests {
         testutil::add_named_worktree(&container, "dev", "dev");
         testutil::add_branch_on_bare(&container.join(".bare"), "feat/x", "x.txt");
 
-        let loops = open_loops(&container, "root").unwrap();
+        let loops = open_loops(&container, "root", true).unwrap();
         assert_eq!(loops.len(), 1);
         assert_eq!(loops[0].repo_name, "my-app");
         assert_eq!(loops[0].branch, "feat/x");
@@ -513,7 +542,7 @@ mod tests {
         testutil::seed_bare_main(&bare);
         testutil::add_branch_on_bare(&bare, "feat/y", "y.txt");
 
-        let loops = open_loops(&bare, "r").unwrap();
+        let loops = open_loops(&bare, "r", true).unwrap();
         assert_eq!(loops[0].repo_name, "foo");
     }
 
@@ -525,15 +554,15 @@ mod tests {
         testutil::add_branch_with_commit(&repo, "feat/x", "x.txt");
         testutil::git(&repo, &["branch", "merged"]); // points to main => merged
 
-        let loops = open_loops(&repo, "root").unwrap();
+        let loops = open_loops(&repo, "root", true).unwrap();
         assert_eq!(loops.len(), 1);
         let l = &loops[0];
         assert_eq!(l.branch, "feat/x");
         assert_eq!(l.repo_name, "app");
         assert_eq!(l.root_label, "root");
         assert_eq!(l.key(), "root/app/feat/x");
-        assert_eq!(l.ahead, 1);
-        assert_eq!(l.behind, 0);
+        assert_eq!(l.ahead, Some(1));
+        assert_eq!(l.behind, Some(0));
         assert_eq!(l.head_sha.len(), 40);
     }
 
@@ -544,7 +573,7 @@ mod tests {
         testutil::init_bare_worktree_container(&container);
         testutil::add_worktree_with_commit(&container, "feat-x", "feat/x", "x.txt");
 
-        let loops = open_loops(&container, "root").unwrap();
+        let loops = open_loops(&container, "root", true).unwrap();
         let lp = loops
             .iter()
             .find(|l| l.branch == "feat/x")
@@ -560,7 +589,7 @@ mod tests {
         // feat/y exists in the store but is NOT checked out in any worktree
         testutil::add_branch_on_bare(&container.join(".bare"), "feat/y", "y.txt");
 
-        let loops = open_loops(&container, "root").unwrap();
+        let loops = open_loops(&container, "root", true).unwrap();
         let lp = loops
             .iter()
             .find(|l| l.branch == "feat/y")
@@ -574,9 +603,57 @@ mod tests {
         let repo = tmp.path().join("app");
         testutil::init_repo(&repo);
         testutil::add_branch_with_commit(&repo, "feat/x", "x.txt"); // checks out feat/x then back to main
-        let loops = open_loops(&repo, "root").unwrap();
+        let loops = open_loops(&repo, "root", true).unwrap();
         assert_eq!(loops[0].branch, "feat/x");
         assert_eq!(loops[0].repo_path, repo); // not checked out in a worktree → fallback
+    }
+
+    #[test]
+    fn open_loops_skips_rev_list_when_need_ahead_behind_false() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path().join("app");
+        testutil::init_repo(&repo);
+        testutil::add_branch_with_commit(&repo, "feat/x", "x.txt");
+
+        let loops = open_loops(&repo, "root", false).unwrap();
+        assert_eq!(loops.len(), 1);
+        assert_eq!(loops[0].ahead, None);
+        assert_eq!(loops[0].behind, None);
+    }
+
+    #[test]
+    fn open_loops_computes_ahead_behind_when_need_ahead_behind_true() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path().join("app");
+        testutil::init_repo(&repo);
+        testutil::add_branch_with_commit(&repo, "feat/x", "x.txt");
+
+        let loops = open_loops(&repo, "root", true).unwrap();
+        assert_eq!(loops.len(), 1);
+        assert_eq!(loops[0].ahead, Some(1));
+        assert_eq!(loops[0].behind, Some(0));
+    }
+
+    #[test]
+    fn scan_repo_filter_pushdown_skips_non_matching_repos() {
+        let tmp = tempfile::tempdir().unwrap();
+        let api = tmp.path().join("api-service");
+        let web = tmp.path().join("web-app");
+        testutil::init_repo(&api);
+        testutil::init_repo(&web);
+        testutil::add_branch_with_commit(&api, "feat/api", "a.txt");
+        testutil::add_branch_with_commit(&web, "feat/web", "w.txt");
+
+        let labels = vec![(tmp.path().to_path_buf(), "r".to_string())];
+        let (loops, _) = scan(&[tmp.path().to_path_buf()], &labels, 4, false, Some("api"));
+        assert_eq!(loops.len(), 1);
+        assert_eq!(loops[0].repo_name, "api-service");
+        assert_eq!(loops[0].branch, "feat/api");
+    }
+
+    #[test]
+    fn repo_name_hint_strips_dot_git_suffix() {
+        assert_eq!(repo_name_hint(std::path::Path::new("/srv/foo.git")), "foo");
     }
 
     #[test]
@@ -591,7 +668,7 @@ mod tests {
         testutil::git(&empty, &["init", "-b", "main"]);
 
         let labels = vec![(tmp.path().to_path_buf(), "r".to_string())];
-        let (loops, warnings) = scan(&[tmp.path().to_path_buf()], &labels, 4);
+        let (loops, warnings) = scan(&[tmp.path().to_path_buf()], &labels, 4, true, None);
         assert_eq!(loops.len(), 1);
         assert_eq!(loops[0].key(), "r/good/feat/ok");
         assert_eq!(warnings.len(), 1);

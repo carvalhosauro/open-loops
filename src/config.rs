@@ -93,6 +93,27 @@ impl Config {
         }
         Ok(out)
     }
+
+    /// Subset of configured roots matching `plan.root_filter` (label or path
+    /// substring, case-insensitive). Returns all roots when no filter is set.
+    pub fn resolve_scan_roots(
+        &self,
+        plan: &crate::query::ScanPlan,
+    ) -> Result<Vec<std::path::PathBuf>> {
+        let labels = self.resolve_labels()?;
+        let Some(filter) = &plan.root_filter else {
+            return Ok(self.roots.clone());
+        };
+        let needle = filter.to_lowercase();
+        Ok(labels
+            .into_iter()
+            .filter(|(root, label)| {
+                label.to_lowercase().contains(&needle)
+                    || root.to_string_lossy().to_lowercase().contains(&needle)
+            })
+            .map(|(root, _)| root)
+            .collect())
+    }
 }
 
 /// Label of the configured root that owns `repo` (longest path prefix wins).
@@ -241,6 +262,36 @@ mod tests {
         };
         store.save(&cfg).unwrap();
         assert_eq!(store.load().unwrap().scan_depth, 6);
+    }
+
+    #[test]
+    fn resolve_scan_roots_filters_by_label_and_path() {
+        let tmp = tempfile::tempdir().unwrap();
+        let work = tmp.path().join("work");
+        let personal = tmp.path().join("personal");
+        std::fs::create_dir_all(&work).unwrap();
+        std::fs::create_dir_all(&personal).unwrap();
+        let mut cfg = Config {
+            roots: vec![work.clone(), personal.clone()],
+            ..Config::default()
+        };
+        cfg.aliases
+            .insert(work.to_string_lossy().into_owned(), "w".into());
+
+        let all = cfg
+            .resolve_scan_roots(&crate::query::ScanPlan::default())
+            .unwrap();
+        assert_eq!(all.len(), 2);
+
+        let by_label = cfg
+            .resolve_scan_roots(&crate::query::parse("root:w").unwrap())
+            .unwrap();
+        assert_eq!(by_label, vec![work.clone()]);
+
+        let by_path = cfg
+            .resolve_scan_roots(&crate::query::parse("root:personal").unwrap())
+            .unwrap();
+        assert_eq!(by_path, vec![personal]);
     }
 
     #[test]

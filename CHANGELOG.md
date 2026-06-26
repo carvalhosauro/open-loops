@@ -7,6 +7,7 @@
 - Add ADR 0005 for git-based repo discovery
 
 ### Features
+- Wire ScanPlan push-down and light/heavy git split in scanner
 - Attribute AI sessions to the branch's worktree
 - Derive repo_name from git common-dir
 - Resolve git common-dir via rev-parse

@@ -185,6 +185,12 @@ fn session_match_tags(e: &SessionExcerpt) -> String {
     }
 }
 
+fn format_ab(ahead: Option<u32>, behind: Option<u32>) -> String {
+    let a = ahead.map(|n| n.to_string()).unwrap_or_else(|| "-".into());
+    let b = behind.map(|n| n.to_string()).unwrap_or_else(|| "-".into());
+    format!("{a}, behind: {b}")
+}
+
 /// Shows git and session evidence that would feed distillation, without calling the LLM.
 pub fn format_dry_run(
     lp: &OpenLoop,
@@ -200,7 +206,7 @@ pub fn format_dry_run(
          ## Git\n\n\
          - branch: {} (HEAD {})\n\
          - base: {}\n\
-         - ahead: {}, behind: {}\n\n\
+         - ahead: {}\n\n\
          ### Commits (base..branch)\n{}\n\n\
          ### Diffstat\n{}\n\n\
          ## AI sessions\n",
@@ -209,8 +215,7 @@ pub fn format_dry_run(
         lp.branch,
         short_sha,
         default_branch,
-        lp.ahead,
-        lp.behind,
+        format_ab(lp.ahead, lp.behind),
         commits.trim_end(),
         diffstat.trim_end(),
     );
@@ -246,8 +251,8 @@ mod tests {
             branch: "feat/login".into(),
             head_sha: "abcdef1234567890".into(),
             last_commit: Utc::now(),
-            ahead: 2,
-            behind: 1,
+            ahead: Some(2),
+            behind: Some(1),
         }
     }
 
@@ -349,8 +354,8 @@ mod tests {
             branch: "feat/x".into(),
             head_sha: "ab1".into(), // 3 chars < 7
             last_commit: Utc::now(),
-            ahead: 0,
-            behind: 0,
+            ahead: Some(0),
+            behind: Some(0),
         };
         let doc = with_sources("## Why\nconteudo", &lp, &[], Confidence::Low);
         assert!(doc.contains("ab1"));
