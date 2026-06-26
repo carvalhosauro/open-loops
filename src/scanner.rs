@@ -163,6 +163,23 @@ pub fn parse_worktree_porcelain(out: &str) -> Vec<WorktreeEntry> {
     entries
 }
 
+/// Maps each checked-out branch to the absolute path of its worktree.
+///
+/// Bare and detached entries are dropped (no branch to key on). git proscribes
+/// the same branch in two worktrees, so the map is 1:1.
+///
+/// # Errors
+///
+/// Returns `Err` if `git worktree list` fails.
+pub fn worktree_map(repo: &Path) -> Result<std::collections::HashMap<String, PathBuf>> {
+    let raw = git(repo, &["worktree", "list", "--porcelain"])?;
+    Ok(parse_worktree_porcelain(&raw)
+        .into_iter()
+        .filter(|e| !e.bare)
+        .filter_map(|e| e.branch.map(|b| (b, e.path)))
+        .collect())
+}
+
 /// Walks roots up to `scan_depth` looking for git repo candidates, then
 /// deduplicates by absolute `--git-common-dir`.
 pub fn find_repos(roots: &[PathBuf], scan_depth: usize) -> (Vec<PathBuf>, Vec<String>) {
@@ -617,6 +634,20 @@ bare
         assert_eq!(entries.len(), 1);
         assert!(entries[0].prunable);
         assert_eq!(entries[0].branch, None);
+    }
+
+    #[test]
+    fn worktree_map_maps_checked_out_branches_to_paths() {
+        let tmp = tempfile::tempdir().unwrap();
+        let container = tmp.path().join("my-app");
+        testutil::init_bare_worktree_container(&container); // main worktree at container/main
+        testutil::add_named_worktree(&container, "dev", "dev"); // dev worktree at container/dev
+
+        let map = worktree_map(&container).unwrap();
+        assert_eq!(map.get("main"), Some(&container.join("main")));
+        assert_eq!(map.get("dev"), Some(&container.join("dev")));
+        // the `.bare` entry is filtered out (no branch / bare)
+        assert!(!map.values().any(|p| p.ends_with(".bare")));
     }
 
     #[test]
