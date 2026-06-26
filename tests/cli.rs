@@ -442,3 +442,81 @@ fn list_finds_branches_in_bare_worktree_layout() {
         .success()
         .stdout(predicate::str::contains("my-app/feat/login"));
 }
+
+#[test]
+fn resume_includes_session_excerpt_for_branch_in_worktree() {
+    let tmp = tempfile::tempdir().unwrap();
+    let home = tmp.path().join("home");
+    let root = tmp.path().join("projects");
+    let container = root.join("my-app");
+
+    // bare + worktree container (inline git: tests/cli.rs has its own git helper)
+    let bare = container.join(".bare");
+    std::fs::create_dir_all(&bare).unwrap();
+    git(&bare, &["init", "--bare", "-b", "main"]);
+    std::fs::write(container.join(".git"), "gitdir: ./.bare\n").unwrap();
+    let main = container.join("main");
+    git(
+        &container,
+        &["worktree", "add", "-b", "main", main.to_str().unwrap()],
+    );
+    std::fs::write(main.join("a.txt"), "a").unwrap();
+    git(&main, &["add", "."]);
+    git(&main, &["commit", "-m", "init"]);
+    // feature branch checked out in its OWN worktree directory
+    let feat = container.join("feat-login");
+    git(
+        &container,
+        &[
+            "worktree",
+            "add",
+            "-b",
+            "feat/login",
+            feat.to_str().unwrap(),
+        ],
+    );
+    std::fs::write(feat.join("b.txt"), "b").unwrap();
+    git(&feat, &["add", "."]);
+    git(&feat, &["commit", "-m", "feat: login wip"]);
+
+    // fake Claude Code session under the ENCODED WORKTREE path (not the container)
+    let sessions = tmp.path().join("ai-sessions");
+    let encoded = feat.to_string_lossy().replace(['/', '.'], "-");
+    let proj = sessions.join(&encoded);
+    std::fs::create_dir_all(&proj).unwrap();
+    std::fs::write(
+        proj.join("s.jsonl"),
+        concat!(
+            r#"{"type":"user","message":{"content":"resume the login feature please"}}"#,
+            "\n",
+        ),
+    )
+    .unwrap();
+
+    loops(&home).arg("init").arg(&root).assert().success();
+
+    // point llm_command at `cat` and sessions_dir at our fake projects dir (in place)
+    let cfg_path = home.join("config.toml");
+    let raw = std::fs::read_to_string(&cfg_path).unwrap();
+    let rewritten: String = raw
+        .lines()
+        .map(|l| {
+            if l.trim_start().starts_with("sessions_dir") {
+                format!("sessions_dir = \"{}\"", sessions.display())
+            } else if l.trim_start().starts_with("llm_command") {
+                "llm_command = \"cat\"".to_string()
+            } else {
+                l.to_string()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    std::fs::write(&cfg_path, rewritten + "\n").unwrap();
+
+    // resume distills (cat echoes the prompt) AND carries the worktree session excerpt
+    loops(&home)
+        .args(["resume", "feat/login"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("resume the login feature please"));
+}
