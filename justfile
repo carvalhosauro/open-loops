@@ -22,3 +22,11 @@ cov:
 # require: cargo install git-cliff
 changelog:
     git cliff -o CHANGELOG.md
+
+# deterministic stress benchmark (use `just stress --heavy` for the big scales)
+stress *ARGS:
+    bash scripts/stress/bench.sh {{ARGS}}
+
+# black-box behavior regression (CI-able; nonzero exit on any failure)
+regress *ARGS:
+    bash scripts/stress/regress.sh {{ARGS}}
