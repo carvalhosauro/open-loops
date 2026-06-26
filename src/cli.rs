@@ -11,7 +11,6 @@ use crate::scanner::{self, OpenLoop, ScanOptions};
 use crate::{cache, distill, output, sessions, worktrees};
 use anyhow::{bail, ensure, Result};
 use sessions::{SessionExcerpt, SessionSource};
-use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 struct ResumeEvidence {
@@ -26,15 +25,12 @@ fn progress(msg: &str) {
     eprintln!("{msg}");
 }
 
-/// Writes inventory updates produced by a scan to disk and returns the set of
-/// hashes that were touched (for orphan pruning in `run_refresh`).
+/// Writes inventory updates produced by a scan to disk.
 fn write_inventory(
     inv_store: &InventoryStore,
     updates: Vec<(String, crate::inventory::InventoryFile)>,
-) -> HashSet<String> {
-    let mut hashes = HashSet::new();
+) {
     for (hash, file) in updates {
-        hashes.insert(hash.clone());
         if let Err(e) = inv_store.save(&hash, &file) {
             eprintln!(
                 "warning: failed to write inventory for {}: {e:#}",
@@ -42,7 +38,6 @@ fn write_inventory(
             );
         }
     }
-    hashes
 }
 
 fn resolve_loop(base: &Path, query: &str, fresh: bool) -> Result<OpenLoop> {
@@ -289,9 +284,10 @@ pub fn run_refresh(base: &Path, query: &str) -> Result<()> {
         eprintln!("warning: {w}");
     }
     let n = inv_updates.len();
-    let active_hashes = write_inventory(&inv_store, inv_updates);
-    inv_store.prune_orphans(&active_hashes)?;
-    eprintln!("refreshed {n} repos");
+    write_inventory(&inv_store, inv_updates);
+    inv_store.prune_orphans()?;
+    let noun = if n == 1 { "repo" } else { "repos" };
+    eprintln!("refreshed {n} {noun}");
     Ok(())
 }
 

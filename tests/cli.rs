@@ -592,7 +592,56 @@ fn inventory_write_through_on_list() {
         .arg("refresh")
         .assert()
         .success()
-        .stderr(predicate::str::contains("refreshed 1 repos"));
+        .stderr(predicate::str::contains("refreshed 1 repo"));
+}
+
+#[test]
+fn scoped_refresh_does_not_prune_other_inventory() {
+    let tmp = tempfile::tempdir().unwrap();
+    let home = tmp.path().join("home");
+    let api = tmp.path().join("projects/api-service");
+    let web = tmp.path().join("projects/web-app");
+    for repo in [&api, &web] {
+        std::fs::create_dir_all(repo).unwrap();
+        git(repo, &["init", "-b", "main"]);
+        std::fs::write(repo.join("a.txt"), "a").unwrap();
+        git(repo, &["add", "."]);
+        git(repo, &["commit", "-m", "init"]);
+        git(repo, &["checkout", "-b", "feat/x"]);
+        std::fs::write(repo.join("b.txt"), "b").unwrap();
+        git(repo, &["add", "."]);
+        git(repo, &["commit", "-m", "feat"]);
+    }
+
+    loops(&home)
+        .arg("init")
+        .arg(tmp.path().join("projects"))
+        .assert()
+        .success();
+
+    loops(&home).assert().success();
+
+    let inv_dir = home.join("inventory");
+    let count_json = || {
+        std::fs::read_dir(&inv_dir)
+            .unwrap()
+            .flatten()
+            .filter(|e| e.path().extension().is_some_and(|x| x == "json"))
+            .count()
+    };
+    assert_eq!(count_json(), 2, "expected one inventory file per repo");
+
+    loops(&home)
+        .args(["refresh", "repo:api"])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("refreshed 1 repo"));
+
+    assert_eq!(
+        count_json(),
+        2,
+        "scoped refresh must not delete inventory for repos outside the query"
+    );
 }
 
 #[test]

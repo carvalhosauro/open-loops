@@ -7,7 +7,6 @@
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 /// One memoised ahead/behind entry for a branch.
@@ -78,11 +77,13 @@ impl InventoryStore {
         Ok(())
     }
 
-    /// Removes inventory files whose hash is not in `active_hashes` **or**
-    /// whose `repo_path` no longer exists on disk.
+    /// Removes inventory files whose `repo_path` no longer exists on disk.
+    ///
+    /// Scoped refresh (e.g. `loops refresh api`) must not evict memos for repos
+    /// outside the query — only disk-gone repos are orphans.
     ///
     /// Called lazily from `loops refresh` only (ADR 0004 pattern).
-    pub fn prune_orphans(&self, active_hashes: &HashSet<String>) -> Result<()> {
+    pub fn prune_orphans(&self) -> Result<()> {
         if !self.dir.exists() {
             return Ok(());
         }
@@ -102,12 +103,11 @@ impl InventoryStore {
             if stem.starts_with('.') {
                 continue;
             }
-            let in_active_set = active_hashes.contains(&stem);
             let repo_exists = self
                 .load(&stem)
                 .map(|f| f.repo_path.exists())
                 .unwrap_or(false);
-            if !in_active_set || !repo_exists {
+            if !repo_exists {
                 match std::fs::remove_file(&path) {
                     Ok(()) => eprintln!("warning: removed orphan inventory {}", path.display()),
                     Err(e) => eprintln!(
@@ -332,32 +332,27 @@ mod tests {
     }
 
     #[test]
-    fn prune_orphans_removes_file_not_in_active_set() {
+    fn prune_orphans_removes_file_when_repo_path_missing() {
         let tmp = tempfile::tempdir().unwrap();
         let store = InventoryStore::new(tmp.path());
-        // Write an orphan (repo_path does not exist on disk).
         let file = make_file("/nonexistent/repo/path", vec![]);
         let hash = "orphan0123456789";
         store.save(hash, &file).unwrap();
 
-        let active: HashSet<String> = HashSet::new(); // does not contain the orphan hash
-        store.prune_orphans(&active).unwrap();
+        store.prune_orphans().unwrap();
 
         assert!(!path_for_hash(&store.dir, hash).exists());
     }
 
     #[test]
-    fn prune_orphans_keeps_file_in_active_set_with_existing_repo() {
+    fn prune_orphans_keeps_file_when_repo_path_exists() {
         let tmp = tempfile::tempdir().unwrap();
         let store = InventoryStore::new(tmp.path());
-        // Use tmp.path() as the repo_path so it definitely exists.
         let file = make_file(tmp.path().to_str().unwrap(), vec![]);
         let hash = "active0123456789";
         store.save(hash, &file).unwrap();
 
-        let mut active = HashSet::new();
-        active.insert(hash.to_string());
-        store.prune_orphans(&active).unwrap();
+        store.prune_orphans().unwrap();
 
         assert!(path_for_hash(&store.dir, hash).exists());
     }
