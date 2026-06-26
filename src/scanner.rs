@@ -163,6 +163,10 @@ pub fn parse_worktree_porcelain(out: &str) -> Vec<WorktreeEntry> {
     entries
 }
 
+fn normalize_path(path: PathBuf) -> PathBuf {
+    std::fs::canonicalize(&path).unwrap_or(path)
+}
+
 /// Maps each checked-out branch to the absolute path of its worktree.
 ///
 /// Bare and detached entries are dropped (no branch to key on). git proscribes
@@ -176,7 +180,7 @@ pub fn worktree_map(repo: &Path) -> Result<std::collections::HashMap<String, Pat
     Ok(parse_worktree_porcelain(&raw)
         .into_iter()
         .filter(|e| !e.bare)
-        .filter_map(|e| e.branch.map(|b| (b, e.path)))
+        .filter_map(|e| e.branch.map(|b| (b, normalize_path(e.path))))
         .collect())
 }
 
@@ -403,6 +407,12 @@ mod tests {
     use super::*;
     use crate::testutil;
 
+    fn assert_same_path(actual: &std::path::Path, expected: &std::path::Path) {
+        let a = std::fs::canonicalize(actual).unwrap_or_else(|_| actual.to_path_buf());
+        let b = std::fs::canonicalize(expected).unwrap_or_else(|_| expected.to_path_buf());
+        assert_eq!(a, b);
+    }
+
     #[test]
     fn default_branch_detects_main() {
         let tmp = tempfile::tempdir().unwrap();
@@ -549,7 +559,7 @@ mod tests {
             .iter()
             .find(|l| l.branch == "feat/x")
             .expect("feat/x loop");
-        assert_eq!(lp.repo_path, container.join("feat-x"));
+        assert_same_path(&lp.repo_path, &container.join("feat-x"));
     }
 
     #[test]
@@ -697,8 +707,8 @@ bare
         testutil::add_named_worktree(&container, "dev", "dev"); // dev worktree at container/dev
 
         let map = worktree_map(&container).unwrap();
-        assert_eq!(map.get("main"), Some(&container.join("main")));
-        assert_eq!(map.get("dev"), Some(&container.join("dev")));
+        assert_same_path(map.get("main").unwrap(), &container.join("main"));
+        assert_same_path(map.get("dev").unwrap(), &container.join("dev"));
         // the `.bare` entry is filtered out (no branch / bare)
         assert!(!map.values().any(|p| p.ends_with(".bare")));
     }

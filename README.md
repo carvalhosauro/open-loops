@@ -1,5 +1,10 @@
 # open-loops
 
+[![CI](https://github.com/carvalhosauro/open-loops/actions/workflows/ci.yml/badge.svg)](https://github.com/carvalhosauro/open-loops/actions/workflows/ci.yml)
+[![crates.io](https://img.shields.io/crates/v/open-loops.svg)](https://crates.io/crates/open-loops)
+[![MSRV](https://img.shields.io/badge/MSRV-1.89-blue)](rust-toolchain.toml)
+[![license](https://img.shields.io/crates/l/open-loops.svg)](LICENSE)
+
 > What did I start and not finish? Where did I leave off? What's the next step?
 
 `loops` lists your paused work (unmerged branches across all your repos) and

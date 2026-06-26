@@ -10,10 +10,13 @@ pub struct ClaudeCode {
     pub projects_dir: PathBuf,
 }
 
-/// Claude Code encodes the project path by replacing '/' and '.' with '-'.
-/// e.g. /home/g/repo/x -> -home-g-repo-x
+/// Claude Code encodes the project path by replacing path separators and '.' with '-'.
+/// e.g. /home/g/repo/x -> -home-g-repo-x, C:\Users\g\app -> C--Users-g-app
 pub fn encode_project_path(p: &Path) -> String {
-    p.to_string_lossy().replace(['/', '.'], "-")
+    let raw = p.to_string_lossy();
+    // Windows canonicalize() may add \\?\ — Claude Code encodes the normal path.
+    let raw = raw.strip_prefix(r"\\?\").unwrap_or(&raw);
+    raw.replace(['/', '\\', '.', ':'], "-")
 }
 
 /// Extracts text from a session jsonl line. None for non-message,
@@ -138,6 +141,15 @@ mod tests {
         assert_eq!(
             encode_project_path(Path::new("/home/g/my.app")),
             "-home-g-my-app"
+        );
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn encode_project_path_handles_windows_separators() {
+        assert_eq!(
+            encode_project_path(Path::new(r"C:\Users\g\app")),
+            "C--Users-g-app"
         );
     }
 

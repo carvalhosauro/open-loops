@@ -1,5 +1,6 @@
 //! E2E: real binary, real git repos, LLM replaced by `cat`.
 use assert_cmd::Command;
+use open_loops::sessions::claude_code::encode_project_path;
 use predicates::prelude::*;
 use std::path::Path;
 
@@ -23,6 +24,11 @@ fn loops(home: &Path) -> Command {
     let mut cmd = Command::cargo_bin("loops").unwrap();
     cmd.env("OPEN_LOOPS_HOME", home);
     cmd
+}
+
+/// TOML basic strings treat `\` as escape; use forward slashes (valid on all OSes).
+fn toml_path(p: &Path) -> String {
+    p.display().to_string().replace('\\', "/")
 }
 
 #[test]
@@ -481,8 +487,8 @@ fn resume_includes_session_excerpt_for_branch_in_worktree() {
 
     // fake Claude Code session under the ENCODED WORKTREE path (not the container)
     let sessions = tmp.path().join("ai-sessions");
-    let encoded = feat.to_string_lossy().replace(['/', '.'], "-");
-    let proj = sessions.join(&encoded);
+    let feat_path = std::fs::canonicalize(&feat).unwrap_or(feat);
+    let proj = sessions.join(encode_project_path(&feat_path));
     std::fs::create_dir_all(&proj).unwrap();
     std::fs::write(
         proj.join("s.jsonl"),
@@ -502,7 +508,7 @@ fn resume_includes_session_excerpt_for_branch_in_worktree() {
         .lines()
         .map(|l| {
             if l.trim_start().starts_with("sessions_dir") {
-                format!("sessions_dir = \"{}\"", sessions.display())
+                format!("sessions_dir = \"{}\"", toml_path(&sessions))
             } else if l.trim_start().starts_with("llm_command") {
                 "llm_command = \"cat\"".to_string()
             } else {
