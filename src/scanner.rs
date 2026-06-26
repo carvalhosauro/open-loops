@@ -118,6 +118,51 @@ pub fn git_common_dir(path: &Path) -> Result<PathBuf> {
     Ok(PathBuf::from(raw))
 }
 
+/// One entry from `git worktree list --porcelain`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WorktreeEntry {
+    pub path: PathBuf,
+    /// Short branch name (`refs/heads/` stripped). `None` when detached or bare.
+    pub branch: Option<String>,
+    pub bare: bool,
+    pub prunable: bool,
+}
+
+/// Parses `git worktree list --porcelain` into entries.
+///
+/// Pure over the git output: a new entry starts at each `worktree ` line; the
+/// `HEAD`/`detached`/`locked` lines leave `branch` as `None`. Tolerant — unknown
+/// or blank lines are ignored, never panics.
+pub fn parse_worktree_porcelain(out: &str) -> Vec<WorktreeEntry> {
+    let mut entries = Vec::new();
+    let mut current: Option<WorktreeEntry> = None;
+    for line in out.lines() {
+        if let Some(p) = line.strip_prefix("worktree ") {
+            if let Some(e) = current.take() {
+                entries.push(e);
+            }
+            current = Some(WorktreeEntry {
+                path: PathBuf::from(p),
+                branch: None,
+                bare: false,
+                prunable: false,
+            });
+        } else if let Some(e) = current.as_mut() {
+            if let Some(b) = line.strip_prefix("branch ") {
+                e.branch = Some(b.strip_prefix("refs/heads/").unwrap_or(b).to_string());
+            } else if line == "bare" {
+                e.bare = true;
+            } else if line == "prunable" || line.starts_with("prunable ") {
+                e.prunable = true;
+            }
+        }
+    }
+    if let Some(e) = current.take() {
+        entries.push(e);
+    }
+    entries
+}
+
 /// Walks roots up to `scan_depth` looking for git repo candidates, then
 /// deduplicates by absolute `--git-common-dir`.
 pub fn find_repos(roots: &[PathBuf], scan_depth: usize) -> (Vec<PathBuf>, Vec<String>) {
@@ -531,6 +576,47 @@ mod tests {
         testutil::init_bare_worktree_container(&container);
         let bare_common = git_common_dir(&container).unwrap();
         assert!(bare_common.ends_with(".bare"));
+    }
+
+    #[test]
+    fn parse_worktree_porcelain_extracts_branches_and_flags() {
+        let out = "\
+worktree /home/u/app/main
+HEAD aaaaaaaa
+branch refs/heads/main
+
+worktree /home/u/app/feat-x
+HEAD bbbbbbbb
+branch refs/heads/feat/x
+
+worktree /home/u/app/detached
+HEAD cccccccc
+detached
+
+worktree /home/u/app/.bare
+bare
+";
+        let entries = parse_worktree_porcelain(out);
+        assert_eq!(entries.len(), 4);
+        assert_eq!(entries[0].branch.as_deref(), Some("main"));
+        assert_eq!(
+            entries[0].path,
+            std::path::PathBuf::from("/home/u/app/main")
+        );
+        assert_eq!(entries[1].branch.as_deref(), Some("feat/x")); // slash preserved
+        assert_eq!(entries[2].branch, None); // detached
+        assert!(entries[3].bare);
+        assert_eq!(entries[3].branch, None);
+    }
+
+    #[test]
+    fn parse_worktree_porcelain_marks_prunable_and_handles_empty() {
+        assert!(parse_worktree_porcelain("").is_empty());
+        let out = "worktree /gone\nprunable gitdir file points to non-existent location\n";
+        let entries = parse_worktree_porcelain(out);
+        assert_eq!(entries.len(), 1);
+        assert!(entries[0].prunable);
+        assert_eq!(entries[0].branch, None);
     }
 
     #[test]
