@@ -526,3 +526,31 @@ fn resume_includes_session_excerpt_for_branch_in_worktree() {
         .success()
         .stdout(predicate::str::contains("resume the login feature please"));
 }
+
+#[test]
+fn resume_dry_run_skips_ahead_behind_without_attr_filter() {
+    let tmp = tempfile::tempdir().unwrap();
+    let home = tmp.path().join("home");
+    let repo = tmp.path().join("projetos/meu-app");
+    std::fs::create_dir_all(&repo).unwrap();
+    git(&repo, &["init", "-b", "main"]);
+    std::fs::write(repo.join("a.txt"), "a").unwrap();
+    git(&repo, &["add", "."]);
+    git(&repo, &["commit", "-m", "init"]);
+    git(&repo, &["checkout", "-b", "feat/login"]);
+    std::fs::write(repo.join("b.txt"), "b").unwrap();
+    git(&repo, &["add", "."]);
+    git(&repo, &["commit", "-m", "feat: login wip"]);
+
+    loops(&home)
+        .arg("init")
+        .arg(tmp.path().join("projetos"))
+        .assert()
+        .success();
+
+    loops(&home)
+        .args(["resume", "feat/login", "--dry-run"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("ahead: -, behind: -"));
+}

@@ -78,16 +78,16 @@ Depende de: **Spec Fase A**
 - [x] `just lint` + `just fmt`; cobertura no gate
 - [x] CHANGELOG atualizado
 
-### ⬜ ADR fase 2 — push-down + split fase leve/pesada  ·  [ADR 0003](docs/decisions/0003-query-engine.md)
+### ✅ ADR fase 2 — push-down + split fase leve/pesada  ·  [ADR 0003](docs/decisions/0003-query-engine.md)
 
-**Próximo bloqueador (query engine).** Depende de: **Spec Fase A** (scan que acha repos + `repo_name` final)
+Depende de: **Spec Fase A** (scan que acha repos + `repo_name` final). `@` contexts ficam na fase 4.
 
-- [ ] wire do `ScanPlan` no scan
-- [ ] push-down de roots (subset de `cfg.roots` via `@`/`root:`)
-- [ ] filtra repos por `repo_filter` **antes** de qualquer git
-- [ ] split fase leve (sempre roda) / fase pesada (`rev-list` sob demanda)
-- [ ] `need_ahead_behind` = renderiza colunas AHEAD/BEHIND **ou** query tem attr `ahead`/`behind`
-- [ ] `ahead`/`behind` ficam `None` quando a fase pesada não roda; `render_table` imprime `-`
+- [x] wire do `ScanPlan` no scan
+- [x] push-down de roots (subset de `cfg.roots` via `root:`; `@` na fase 4)
+- [x] filtra repos por `repo_filter` **antes** de qualquer git
+- [x] split fase leve (sempre roda) / fase pesada (`rev-list` sob demanda)
+- [x] `need_ahead_behind` = renderiza colunas AHEAD/BEHIND **ou** query tem attr `ahead`/`behind`
+- [x] `ahead`/`behind` ficam `None` quando a fase pesada não roda; `render_table` imprime `-`
 
 ### ⬜ ADR fase 3 — inventory cache + refresh  ·  [ADR 0003](docs/decisions/0003-query-engine.md)
 

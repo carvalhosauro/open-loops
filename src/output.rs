@@ -21,6 +21,10 @@ pub fn human_age(now: DateTime<Utc>, then: DateTime<Utc>) -> String {
     }
 }
 
+pub fn fmt_count(v: Option<u32>) -> String {
+    v.map(|n| n.to_string()).unwrap_or_else(|| "-".into())
+}
+
 /// Renders a sorted loop inventory table, most idle first (staleness is the attention criterion).
 ///
 /// Returns a celebratory message when the list is empty.
@@ -45,8 +49,8 @@ pub fn render_table(loops: &[OpenLoop], now: DateTime<Utc>) -> String {
             "{:<key_w$}  {:>9}  {:>5}  {:>6}\n",
             l.key(),
             human_age(now, l.last_commit),
-            l.ahead,
-            l.behind
+            fmt_count(l.ahead),
+            fmt_count(l.behind)
         ));
     }
     out
@@ -159,8 +163,8 @@ mod tests {
             branch: branch.into(),
             head_sha: "abc".into(),
             last_commit: Utc::now() - Duration::days(idle_days),
-            ahead: 1,
-            behind: 0,
+            ahead: Some(1),
+            behind: Some(0),
         }
     }
 
@@ -180,6 +184,16 @@ mod tests {
         assert!(pos_antiga < pos_recente);
         assert!(t.contains("LOOP"));
         assert!(t.contains("30d"));
+    }
+
+    #[test]
+    fn render_table_shows_dash_for_none_ahead_behind() {
+        let mut l = lp("feat/x", 1);
+        l.ahead = None;
+        l.behind = None;
+        let t = render_table(&[l], Utc::now());
+        let line = t.lines().find(|ln| ln.contains("feat/x")).unwrap();
+        assert!(line.contains("  -  "), "expected dashes in: {line}");
     }
 
     #[test]

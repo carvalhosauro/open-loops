@@ -62,8 +62,8 @@ mod tests {
             branch: "feat/login".into(),
             head_sha: sha.into(),
             last_commit: Utc::now(),
-            ahead: 1,
-            behind: 0,
+            ahead: Some(1),
+            behind: Some(0),
         }
     }
 

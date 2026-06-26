@@ -4,7 +4,7 @@
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Config {
@@ -92,6 +92,95 @@ impl Config {
             out.push((root.clone(), label));
         }
         Ok(out)
+    }
+
+    /// Subset of configured roots matching `plan.root_filter`. Path values are
+    /// tilde-expanded and canonicalized, then matched as a prefix against roots
+    /// (ADR 0003). Label/path substring match is a fallback for short aliases.
+    pub fn resolve_scan_roots(
+        &self,
+        plan: &crate::query::ScanPlan,
+    ) -> Result<Vec<std::path::PathBuf>> {
+        let labels = self.resolve_labels()?;
+        let Some(filter) = &plan.root_filter else {
+            return Ok(self.roots.clone());
+        };
+        let mut prefix = expand_tilde(filter);
+        if prefix.exists() {
+            if let Ok(canon) = std::fs::canonicalize(&prefix) {
+                prefix = canon;
+            }
+        }
+        let needle = filter.to_lowercase();
+        Ok(labels
+            .into_iter()
+            .filter(|(root, label)| root_matches_filter(root, label, filter, &needle, &prefix))
+            .map(|(root, _)| root)
+            .collect())
+    }
+}
+
+/// True when `root`/`label` match a `root:` filter (ADR 0003).
+fn root_matches_filter(
+    root: &std::path::Path,
+    label: &str,
+    filter: &str,
+    needle: &str,
+    prefix: &std::path::Path,
+) -> bool {
+    // Canonical path prefix after tilde-expand (e.g. root:~/work).
+    if path_prefix_match(root, prefix) {
+        return true;
+    }
+    // Alias shortcut (e.g. root:w) — exact label, not substring (avoids "w" ⊂ "personal").
+    if label.eq_ignore_ascii_case(filter) {
+        return true;
+    }
+    // Path tail after optional ~/ (e.g. root:~/work or root:personal).
+    let path_needle = needle
+        .strip_prefix("~/")
+        .or_else(|| needle.strip_prefix('~'))
+        .unwrap_or(needle);
+    // Path component — basename only, not the full temp path.
+    if root
+        .file_name()
+        .is_some_and(|n| n.to_string_lossy().eq_ignore_ascii_case(path_needle))
+    {
+        return true;
+    }
+    let root_str = root.to_string_lossy().to_lowercase();
+    root_str.ends_with(path_needle)
+        || root_str.contains(&format!("/{path_needle}"))
+        || root_str.contains(&format!("\\{path_needle}"))
+}
+
+/// Prefix/equality match tolerant of canonical vs non-canonical paths (Windows `\\?\`).
+fn path_prefix_match(root: &Path, prefix: &Path) -> bool {
+    if root == prefix || root.starts_with(prefix) || prefix.starts_with(root) {
+        return true;
+    }
+    let root_ok = root.exists();
+    let prefix_ok = prefix.exists();
+    if root_ok && prefix_ok {
+        if let (Ok(r), Ok(p)) = (std::fs::canonicalize(root), std::fs::canonicalize(prefix)) {
+            if r == p || r.starts_with(&p) || p.starts_with(&r) {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// Expands a leading `~` to the home directory (ADR `root:` filter).
+fn expand_tilde(path: &str) -> std::path::PathBuf {
+    if let Some(rest) = path.strip_prefix("~/") {
+        dirs::home_dir()
+            .map(|h| h.join(rest))
+            .unwrap_or_else(|| std::path::PathBuf::from(path))
+    } else if path == "~" {
+        dirs::home_dir().unwrap_or_else(|| std::path::PathBuf::from(path))
+    } else {
+        std::path::PathBuf::from(path)
     }
 }
 
@@ -241,6 +330,93 @@ mod tests {
         };
         store.save(&cfg).unwrap();
         assert_eq!(store.load().unwrap().scan_depth, 6);
+    }
+
+    #[test]
+    fn resolve_scan_roots_filters_by_label_and_path() {
+        let tmp = tempfile::tempdir().unwrap();
+        let work = tmp.path().join("work");
+        let personal = tmp.path().join("personal");
+        std::fs::create_dir_all(&work).unwrap();
+        std::fs::create_dir_all(&personal).unwrap();
+        let mut cfg = Config {
+            roots: vec![work.clone(), personal.clone()],
+            ..Config::default()
+        };
+        cfg.aliases
+            .insert(work.to_string_lossy().into_owned(), "w".into());
+
+        let all = cfg
+            .resolve_scan_roots(&crate::query::ScanPlan::default())
+            .unwrap();
+        assert_eq!(all.len(), 2);
+
+        let by_label = cfg
+            .resolve_scan_roots(&crate::query::parse("root:w").unwrap())
+            .unwrap();
+        assert_eq!(by_label, vec![work.clone()]);
+
+        let by_path = cfg
+            .resolve_scan_roots(&crate::query::parse("root:personal").unwrap())
+            .unwrap();
+        assert_eq!(by_path, vec![personal]);
+    }
+
+    #[test]
+    fn resolve_scan_roots_short_alias_does_not_match_unrelated_path_noise() {
+        // Temp dirs like `.tmp02Wc68` contain the letter 'w'; a loose full-path
+        // substring match must not pull in every root when filtering root:w.
+        let tmp = tempfile::tempdir().unwrap();
+        let work = tmp.path().join("work");
+        let personal = tmp.path().join("personal");
+        std::fs::create_dir_all(&work).unwrap();
+        std::fs::create_dir_all(&personal).unwrap();
+        let mut cfg = Config {
+            roots: vec![work.clone(), personal.clone()],
+            ..Config::default()
+        };
+        cfg.aliases
+            .insert(work.to_string_lossy().into_owned(), "w".into());
+
+        let matched = cfg
+            .resolve_scan_roots(&crate::query::parse("root:w").unwrap())
+            .unwrap();
+        assert_eq!(matched, vec![work]);
+    }
+
+    #[test]
+    fn resolve_scan_roots_tilde_expands_to_prefix_match() {
+        let home = dirs::home_dir().expect("home dir");
+        let tmp = tempfile::tempdir().unwrap();
+        let work = home.join(format!(
+            ".loops-test-{}",
+            tmp.path().file_name().unwrap().to_string_lossy()
+        ));
+        std::fs::create_dir_all(&work).unwrap();
+        let cfg = Config {
+            roots: vec![work.clone()],
+            ..Config::default()
+        };
+        let filter = format!("~/{}", work.file_name().unwrap().to_string_lossy());
+        let matched = cfg
+            .resolve_scan_roots(&crate::query::parse(&format!("root:{filter}")).unwrap())
+            .unwrap();
+        assert_eq!(matched, vec![work.clone()]);
+        let _ = std::fs::remove_dir_all(&work);
+    }
+
+    #[test]
+    fn expand_tilde_handles_prefix_bare_and_literal() {
+        let home = dirs::home_dir().expect("home dir");
+        assert_eq!(expand_tilde("~/work"), home.join("work"));
+        assert_eq!(expand_tilde("~"), home);
+        // no leading tilde → returned verbatim, never touches $HOME
+        assert_eq!(
+            expand_tilde("/abs/path"),
+            std::path::PathBuf::from("/abs/path")
+        );
+        // a tilde mid-string is NOT a home marker
+        assert_eq!(expand_tilde("a~b"), std::path::PathBuf::from("a~b"));
     }
 
     #[test]

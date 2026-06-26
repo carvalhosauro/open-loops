@@ -62,7 +62,14 @@ fn resolve_loop(base: &Path, query: &str) -> Result<OpenLoop> {
     let mut plan = crate::query::parse(query)?;
     plan.include_ignored = true; // resume can target an ignored loop by key
     let labels = cfg.resolve_labels()?;
-    let (found, warnings) = scanner::scan(&cfg.roots, &labels, cfg.scan_depth);
+    let roots = cfg.resolve_scan_roots(&plan)?;
+    let (found, warnings) = scanner::scan(
+        &roots,
+        &labels,
+        cfg.scan_depth,
+        plan.need_ahead_behind,
+        plan.repo_filter.as_deref(),
+    );
     for w in &warnings {
         eprintln!("warning: {w}");
     }
@@ -77,8 +84,8 @@ fn resolve_loop(base: &Path, query: &str) -> Result<OpenLoop> {
                     branch: &l.branch,
                     key: &key,
                     last_commit: l.last_commit,
-                    ahead: Some(l.ahead),
-                    behind: Some(l.behind),
+                    ahead: l.ahead,
+                    behind: l.behind,
                     ignored: false,
                 },
                 now,
@@ -134,10 +141,18 @@ pub fn run_list(base: &Path, query: &str) -> Result<()> {
         !cfg.roots.is_empty(),
         "no roots configured. Run: loops init <dir-with-your-repos>"
     );
-    let plan = crate::query::parse(query)?;
+    let mut plan = crate::query::parse(query)?;
+    plan.need_ahead_behind = true; // table always renders AHEAD/BEHIND columns
     let labels = cfg.resolve_labels()?;
+    let roots = cfg.resolve_scan_roots(&plan)?;
     progress("scanning git repositories…");
-    let (found, warnings) = scanner::scan(&cfg.roots, &labels, cfg.scan_depth);
+    let (found, warnings) = scanner::scan(
+        &roots,
+        &labels,
+        cfg.scan_depth,
+        plan.need_ahead_behind,
+        plan.repo_filter.as_deref(),
+    );
     for w in &warnings {
         eprintln!("warning: {w}");
     }
@@ -153,8 +168,8 @@ pub fn run_list(base: &Path, query: &str) -> Result<()> {
                     branch: &l.branch,
                     key: &key,
                     last_commit: l.last_commit,
-                    ahead: Some(l.ahead),
-                    behind: Some(l.behind),
+                    ahead: l.ahead,
+                    behind: l.behind,
                     ignored: ignores.contains(&key),
                 },
                 now,
