@@ -134,20 +134,20 @@ Depende de: **Spec Fase A**, **ADR fase 2** (camada de filtro), reuso da coleta 
 
 Trilha paralela ao query engine. Ordem entre waves travada em §Regras de ordenação.
 
-### ⬜ WAVE 1 — CI hardening  ·  [Spec](docs/superpowers/specs/2026-06-25-ci-hardening-design.md)
+### ✅ WAVE 1 — CI hardening  ·  [Spec](docs/superpowers/specs/2026-06-25-ci-hardening-design.md)
 
 Depende de: —
 
-- [ ] `ci.yml`: matriz ubuntu + macos + windows, `fail-fast: false`
-- [ ] job `msrv` em 1.89; `--locked` em clippy/test/msrv/coverage
-- [ ] `Swatinem/rust-cache` nos jobs que compilam
-- [ ] `concurrency` + env global (`RUSTFLAGS: "-D warnings"`, etc.)
-- [ ] `deny.toml` + job `audit` (cargo-deny, matriz advisories vs licenses)
-- [ ] `.github/dependabot.yml` (cargo + github-actions)
-- [ ] SHA-pin em todos os `uses:`
-- [ ] `test (windows-latest)` verde (corrigir falhas de path/CRLF se expostas)
-- [ ] README badges (CI, crates.io, MSRV, license)
-- [ ] ADR `0006-ci-msrv-cross-os.md`
+- [x] `ci.yml`: matriz ubuntu + macos + windows, `fail-fast: false`
+- [x] job `msrv` em 1.89; `--locked` em clippy/test/msrv/coverage
+- [x] `Swatinem/rust-cache` nos jobs que compilam
+- [x] `concurrency` + env global (`RUSTFLAGS: "-D warnings"`, etc.)
+- [x] `deny.toml` + job `audit` (cargo-deny, matriz advisories vs licenses)
+- [x] `.github/dependabot.yml` (cargo + github-actions)
+- [x] SHA-pin em todos os `uses:`
+- [x] `test (windows-latest)` verde (corrigir falhas de path/CRLF se expostas)
+- [x] README badges (CI, crates.io, MSRV, license)
+- [x] ADR `0006-ci-msrv-cross-os.md`
 
 ### ⬜ WAVE 2/3 — artefato de release + automação  ·  [Spec](docs/superpowers/specs/2026-06-26-release-completeness-automation-design.md)
 

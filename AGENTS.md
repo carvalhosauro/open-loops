@@ -12,6 +12,8 @@ just fmt     # cargo fmt
 just cov     # cobertura, gate 70% (core: alvo 85%)
 ```
 
+CI runs on ubuntu/macos/windows; MSRV 1.89 enforced by dedicated `msrv` job.
+
 ## Estrutura
 
 - `src/scanner.rs` — repos e branches via shell-out ao git

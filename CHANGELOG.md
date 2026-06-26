@@ -1,7 +1,18 @@
 # Changelog
 ## unreleased
 
+### CI
+- Cross-OS test matrix (ubuntu, macos arm64, windows) with `fail-fast: false`
+- Dedicated MSRV job on Rust 1.89 (`cargo check --locked --all-targets`)
+- `--locked` on clippy, test, msrv, and coverage jobs
+- `Swatinem/rust-cache` on compile jobs; global CI env (`RUSTFLAGS: "-D warnings"`, etc.)
+- `cargo-deny` supply-chain audit (advisories non-blocking; licenses/bans/sources blocking)
+- SHA-pinned GitHub Actions; `concurrency` with `cancel-in-progress`
+- Dependabot for Cargo and GitHub Actions (weekly, grouped)
+
 ### Docs
+- Add ADR 0006 for CI, MSRV, and cross-OS testing
+- Add CI badges to README (CI, crates.io, MSRV, license)
 - Add Cursor Cloud setup notes to AGENTS.md
 - Add implementation plan for scanner bare+worktree discovery (Fase A)
 - Add ADR 0005 for git-based repo discovery
