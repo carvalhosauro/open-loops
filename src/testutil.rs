@@ -78,6 +78,16 @@ pub fn add_named_worktree(container: &Path, name: &str, branch: &str) {
     );
 }
 
+/// Adds a `container/<dir_name>/` worktree on a NEW unmerged branch carrying one
+/// exclusive commit — an open loop living in its own worktree (author layout).
+pub fn add_worktree_with_commit(container: &Path, dir_name: &str, branch: &str, file: &str) {
+    add_named_worktree(container, dir_name, branch);
+    let wt = container.join(dir_name);
+    std::fs::write(wt.join(file), file).unwrap();
+    git(&wt, &["add", "."]);
+    git(&wt, &["commit", "-m", &format!("wip {branch}")]);
+}
+
 /// Creates `main` with one commit on a bare repo (no container pointer).
 pub fn seed_bare_main(bare: &Path) {
     let tmp = bare.parent().unwrap().join("_seed");

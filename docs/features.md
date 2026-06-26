@@ -55,6 +55,12 @@ Each resume includes a **confidence score** at the top:
 `--dry-run` prints the git log, diffstat, and matched sessions that would feed
 the LLM, without invoking it.
 
+Sessions are matched against the **worktree where the branch is checked out**.
+In bare+worktree layouts each branch lives in its own directory, so `loops resume`
+looks up the AI sessions recorded for that directory — not the container. A branch
+with no worktree falls back to the repo path: commits and diffstat still distill,
+but session excerpts are typically empty (the AI never ran there).
+
 ## `loops ignore <repo/branch>` — dismiss
 
 ```bash

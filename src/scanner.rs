@@ -118,6 +118,68 @@ pub fn git_common_dir(path: &Path) -> Result<PathBuf> {
     Ok(PathBuf::from(raw))
 }
 
+/// One entry from `git worktree list --porcelain`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WorktreeEntry {
+    pub path: PathBuf,
+    /// Short branch name (`refs/heads/` stripped). `None` when detached or bare.
+    pub branch: Option<String>,
+    pub bare: bool,
+    pub prunable: bool,
+}
+
+/// Parses `git worktree list --porcelain` into entries.
+///
+/// Pure over the git output: a new entry starts at each `worktree ` line; the
+/// `HEAD`/`detached`/`locked` lines leave `branch` as `None`. Tolerant — unknown
+/// or blank lines are ignored, never panics.
+pub fn parse_worktree_porcelain(out: &str) -> Vec<WorktreeEntry> {
+    let mut entries = Vec::new();
+    let mut current: Option<WorktreeEntry> = None;
+    for line in out.lines() {
+        if let Some(p) = line.strip_prefix("worktree ") {
+            if let Some(e) = current.take() {
+                entries.push(e);
+            }
+            current = Some(WorktreeEntry {
+                path: PathBuf::from(p),
+                branch: None,
+                bare: false,
+                prunable: false,
+            });
+        } else if let Some(e) = current.as_mut() {
+            if let Some(b) = line.strip_prefix("branch ") {
+                e.branch = Some(b.strip_prefix("refs/heads/").unwrap_or(b).to_string());
+            } else if line == "bare" {
+                e.bare = true;
+            } else if line == "prunable" || line.starts_with("prunable ") {
+                e.prunable = true;
+            }
+        }
+    }
+    if let Some(e) = current.take() {
+        entries.push(e);
+    }
+    entries
+}
+
+/// Maps each checked-out branch to the absolute path of its worktree.
+///
+/// Bare and detached entries are dropped (no branch to key on). git proscribes
+/// the same branch in two worktrees, so the map is 1:1.
+///
+/// # Errors
+///
+/// Returns `Err` if `git worktree list` fails.
+pub fn worktree_map(repo: &Path) -> Result<std::collections::HashMap<String, PathBuf>> {
+    let raw = git(repo, &["worktree", "list", "--porcelain"])?;
+    Ok(parse_worktree_porcelain(&raw)
+        .into_iter()
+        .filter(|e| !e.bare)
+        .filter_map(|e| e.branch.map(|b| (b, e.path)))
+        .collect())
+}
+
 /// Walks roots up to `scan_depth` looking for git repo candidates, then
 /// deduplicates by absolute `--git-common-dir`.
 pub fn find_repos(roots: &[PathBuf], scan_depth: usize) -> (Vec<PathBuf>, Vec<String>) {
@@ -178,6 +240,13 @@ pub fn open_loops(repo: &Path, root_label: &str) -> Result<Vec<OpenLoop>> {
     let default = default_branch(repo)?;
     let common_dir = git_common_dir(repo)?;
     let repo_name = repo_name_from_common_dir(&common_dir);
+    let worktrees = worktree_map(repo).unwrap_or_else(|e| {
+        eprintln!(
+            "warning: git worktree list failed in {}: {e:#}; session matching falls back to the repo path",
+            repo.display()
+        );
+        std::collections::HashMap::new()
+    });
     let merged: std::collections::HashSet<String> = git(
         repo,
         &["branch", "--merged", &default, "--format=%(refname:short)"],
@@ -219,10 +288,14 @@ pub fn open_loops(repo: &Path, root_label: &str) -> Result<Vec<OpenLoop>> {
         let last_commit = DateTime::parse_from_rfc3339(date)
             .with_context(|| format!("invalid date from git: {date}"))?
             .with_timezone(&Utc);
+        let repo_path = worktrees
+            .get(branch)
+            .cloned()
+            .unwrap_or_else(|| repo.to_path_buf());
         result.push(OpenLoop {
             root_label: root_label.to_string(),
             repo_name: repo_name.clone(),
-            repo_path: repo.to_path_buf(),
+            repo_path,
             branch: branch.to_string(),
             head_sha: sha.to_string(),
             last_commit,
@@ -465,6 +538,48 @@ mod tests {
     }
 
     #[test]
+    fn open_loops_sets_repo_path_to_worktree_when_branch_checked_out() {
+        let tmp = tempfile::tempdir().unwrap();
+        let container = tmp.path().join("my-app");
+        testutil::init_bare_worktree_container(&container);
+        testutil::add_worktree_with_commit(&container, "feat-x", "feat/x", "x.txt");
+
+        let loops = open_loops(&container, "root").unwrap();
+        let lp = loops
+            .iter()
+            .find(|l| l.branch == "feat/x")
+            .expect("feat/x loop");
+        assert_eq!(lp.repo_path, container.join("feat-x"));
+    }
+
+    #[test]
+    fn open_loops_falls_back_to_container_when_branch_has_no_worktree() {
+        let tmp = tempfile::tempdir().unwrap();
+        let container = tmp.path().join("my-app");
+        testutil::init_bare_worktree_container(&container);
+        // feat/y exists in the store but is NOT checked out in any worktree
+        testutil::add_branch_on_bare(&container.join(".bare"), "feat/y", "y.txt");
+
+        let loops = open_loops(&container, "root").unwrap();
+        let lp = loops
+            .iter()
+            .find(|l| l.branch == "feat/y")
+            .expect("feat/y loop");
+        assert_eq!(lp.repo_path, container);
+    }
+
+    #[test]
+    fn open_loops_normal_repo_keeps_repo_path_as_repo_dir() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path().join("app");
+        testutil::init_repo(&repo);
+        testutil::add_branch_with_commit(&repo, "feat/x", "x.txt"); // checks out feat/x then back to main
+        let loops = open_loops(&repo, "root").unwrap();
+        assert_eq!(loops[0].branch, "feat/x");
+        assert_eq!(loops[0].repo_path, repo); // not checked out in a worktree → fallback
+    }
+
+    #[test]
     fn scan_aggregates_repos_and_reports_warning_without_aborting() {
         let tmp = tempfile::tempdir().unwrap();
         let good = tmp.path().join("good");
@@ -531,6 +646,80 @@ mod tests {
         testutil::init_bare_worktree_container(&container);
         let bare_common = git_common_dir(&container).unwrap();
         assert!(bare_common.ends_with(".bare"));
+    }
+
+    #[test]
+    fn parse_worktree_porcelain_extracts_branches_and_flags() {
+        let out = "\
+worktree /home/u/app/main
+HEAD aaaaaaaa
+branch refs/heads/main
+
+worktree /home/u/app/feat-x
+HEAD bbbbbbbb
+branch refs/heads/feat/x
+
+worktree /home/u/app/detached
+HEAD cccccccc
+detached
+
+worktree /home/u/app/.bare
+bare
+";
+        let entries = parse_worktree_porcelain(out);
+        assert_eq!(entries.len(), 4);
+        assert_eq!(entries[0].branch.as_deref(), Some("main"));
+        assert_eq!(
+            entries[0].path,
+            std::path::PathBuf::from("/home/u/app/main")
+        );
+        assert_eq!(entries[1].branch.as_deref(), Some("feat/x")); // slash preserved
+        assert_eq!(entries[2].branch, None); // detached
+        assert!(entries[3].bare);
+        assert_eq!(entries[3].branch, None);
+    }
+
+    #[test]
+    fn parse_worktree_porcelain_marks_prunable_and_handles_empty() {
+        assert!(parse_worktree_porcelain("").is_empty());
+        let out = "worktree /gone\nprunable gitdir file points to non-existent location\n";
+        let entries = parse_worktree_porcelain(out);
+        assert_eq!(entries.len(), 1);
+        assert!(entries[0].prunable);
+        assert_eq!(entries[0].branch, None);
+    }
+
+    #[test]
+    fn worktree_map_maps_checked_out_branches_to_paths() {
+        let tmp = tempfile::tempdir().unwrap();
+        let container = tmp.path().join("my-app");
+        testutil::init_bare_worktree_container(&container); // main worktree at container/main
+        testutil::add_named_worktree(&container, "dev", "dev"); // dev worktree at container/dev
+
+        let map = worktree_map(&container).unwrap();
+        assert_eq!(map.get("main"), Some(&container.join("main")));
+        assert_eq!(map.get("dev"), Some(&container.join("dev")));
+        // the `.bare` entry is filtered out (no branch / bare)
+        assert!(!map.values().any(|p| p.ends_with(".bare")));
+    }
+
+    #[test]
+    fn worktree_map_errors_on_non_git_dir() {
+        let tmp = tempfile::tempdir().unwrap();
+        // a plain directory is not a git repo → git worktree list fails
+        assert!(worktree_map(tmp.path()).is_err());
+    }
+
+    #[test]
+    fn parse_worktree_porcelain_ignores_lines_before_first_worktree() {
+        let out = "branch refs/heads/orphan\nHEAD deadbeef\nworktree /home/u/app/main\nbranch refs/heads/main\n";
+        let entries = parse_worktree_porcelain(out);
+        assert_eq!(entries.len(), 1);
+        assert_eq!(
+            entries[0].path,
+            std::path::PathBuf::from("/home/u/app/main")
+        );
+        assert_eq!(entries[0].branch.as_deref(), Some("main"));
     }
 
     #[test]

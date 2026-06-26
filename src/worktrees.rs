@@ -1,5 +1,5 @@
 //! Worktree inventory: joins `git worktree list` with merged/idle/state signals.
-use crate::scanner::{default_branch, find_repos, git};
+use crate::scanner::{default_branch, find_repos, git, parse_worktree_porcelain};
 use anyhow::Result;
 use chrono::{DateTime, Utc};
 use std::collections::HashSet;
@@ -104,31 +104,13 @@ pub fn worktrees(repo: &Path) -> Result<Vec<Worktree>> {
 
     let mut out = Vec::new();
     let mut first = true;
-    for block in raw.split("\n\n") {
-        let block = block.trim();
-        if block.is_empty() {
+    for entry in parse_worktree_porcelain(&raw) {
+        if entry.bare {
             continue;
         }
-        let mut wt_path: Option<PathBuf> = None;
-        let mut branch: Option<String> = None;
-        let mut prunable = false;
-        let mut bare = false;
-        for line in block.lines() {
-            if let Some(p) = line.strip_prefix("worktree ") {
-                wt_path = Some(PathBuf::from(p));
-            } else if let Some(b) = line.strip_prefix("branch ") {
-                branch = Some(b.strip_prefix("refs/heads/").unwrap_or(b).to_string());
-            } else if line == "bare" {
-                bare = true;
-            } else if line == "prunable" || line.starts_with("prunable ") {
-                prunable = true;
-            }
-            // "detached" => branch stays None
-        }
-        let Some(wt_path) = wt_path else { continue };
-        if bare {
-            continue;
-        }
+        let wt_path = entry.path;
+        let branch = entry.branch;
+        let prunable = entry.prunable;
         let is_main = first;
         first = false;
 

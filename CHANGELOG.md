@@ -7,6 +7,7 @@
 - Add ADR 0005 for git-based repo discovery
 
 ### Features
+- Attribute AI sessions to the branch's worktree
 - Derive repo_name from git common-dir
 - Resolve git common-dir via rev-parse
 - Detect repos via .git file and bare probe
@@ -17,6 +18,7 @@
 - Thread scan_depth from config through scan and worktrees
 
 ### Internals
+- Share git worktree --porcelain parser between scanner and worktrees
 - Update CHANGELOG and add roadmap and specifications
 - Bump version to 1.0.0 for v1.0.0 tag
 - Add bare and bare+worktree git fixtures
