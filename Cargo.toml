@@ -30,6 +30,11 @@ assert_cmd = "2"
 predicates = "3"
 tempfile = "3"
 
+[build-dependencies]
+clap = { version = "4", features = ["derive"] }
+clap_complete = "4"
+clap_mangen = "0.2"
+
 # The profile that 'dist' will build with
 [profile.dist]
 inherits = "release"
