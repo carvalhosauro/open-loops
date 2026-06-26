@@ -528,6 +528,74 @@ fn resume_includes_session_excerpt_for_branch_in_worktree() {
 }
 
 #[test]
+fn inventory_write_through_on_list() {
+    let tmp = tempfile::tempdir().unwrap();
+    let home = tmp.path().join("home");
+    let repo = tmp.path().join("projects/my-app");
+    std::fs::create_dir_all(&repo).unwrap();
+    git(&repo, &["init", "-b", "main"]);
+    std::fs::write(repo.join("a.txt"), "a").unwrap();
+    git(&repo, &["add", "."]);
+    git(&repo, &["commit", "-m", "init"]);
+    git(&repo, &["checkout", "-b", "feat/cache-me"]);
+    std::fs::write(repo.join("b.txt"), "b").unwrap();
+    git(&repo, &["add", "."]);
+    git(&repo, &["commit", "-m", "feat: cache me"]);
+
+    loops(&home)
+        .arg("init")
+        .arg(tmp.path().join("projects"))
+        .assert()
+        .success();
+
+    // First `loops`: inventory file must be created under home/inventory/.
+    loops(&home)
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("my-app/feat/cache-me"));
+
+    let inv_dir = home.join("inventory");
+    assert!(
+        inv_dir.exists(),
+        "inventory dir should be created after first scan"
+    );
+    let entries: Vec<_> = std::fs::read_dir(&inv_dir)
+        .unwrap()
+        .flatten()
+        .filter(|e| e.path().extension().is_some_and(|x| x == "json"))
+        .collect();
+    assert_eq!(entries.len(), 1, "exactly one inventory JSON expected");
+
+    // Verify the JSON contains the expected fields.
+    let json_raw = std::fs::read_to_string(entries[0].path()).unwrap();
+    let json: serde_json::Value = serde_json::from_str(&json_raw).unwrap();
+    assert!(json["repo_path"].is_string(), "repo_path must be present");
+    assert!(json["indexed_at"].is_string(), "indexed_at must be present");
+    let loops_arr = json["loops"].as_array().unwrap();
+    assert_eq!(loops_arr.len(), 1);
+    let memo = &loops_arr[0];
+    assert_eq!(memo["branch"].as_str().unwrap(), "feat/cache-me");
+    assert!(memo["head_sha"].is_string());
+    assert!(memo["ab_base_sha"].is_string());
+    assert_eq!(memo["ahead"].as_u64().unwrap(), 1);
+    assert_eq!(memo["behind"].as_u64().unwrap(), 0);
+
+    // `loops --fresh` must still work (bypasses memo but rewrites the file).
+    loops(&home)
+        .arg("--fresh")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("feat/cache-me"));
+
+    // `loops refresh` must print "refreshed N repos" on stderr.
+    loops(&home)
+        .arg("refresh")
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("refreshed 1 repos"));
+}
+
+#[test]
 fn resume_dry_run_skips_ahead_behind_without_attr_filter() {
     let tmp = tempfile::tempdir().unwrap();
     let home = tmp.path().join("home");
