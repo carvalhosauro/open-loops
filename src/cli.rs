@@ -1,4 +1,5 @@
 //! Command definitions and module orchestration.
+#[path = "cli_command.rs"]
 mod cli_command;
 pub use cli_command::{Cli, Command};
 
