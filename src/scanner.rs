@@ -240,6 +240,13 @@ pub fn open_loops(repo: &Path, root_label: &str) -> Result<Vec<OpenLoop>> {
     let default = default_branch(repo)?;
     let common_dir = git_common_dir(repo)?;
     let repo_name = repo_name_from_common_dir(&common_dir);
+    let worktrees = worktree_map(repo).unwrap_or_else(|e| {
+        eprintln!(
+            "warning: git worktree list failed in {}: {e:#}; session matching falls back to the repo path",
+            repo.display()
+        );
+        std::collections::HashMap::new()
+    });
     let merged: std::collections::HashSet<String> = git(
         repo,
         &["branch", "--merged", &default, "--format=%(refname:short)"],
@@ -281,10 +288,14 @@ pub fn open_loops(repo: &Path, root_label: &str) -> Result<Vec<OpenLoop>> {
         let last_commit = DateTime::parse_from_rfc3339(date)
             .with_context(|| format!("invalid date from git: {date}"))?
             .with_timezone(&Utc);
+        let repo_path = worktrees
+            .get(branch)
+            .cloned()
+            .unwrap_or_else(|| repo.to_path_buf());
         result.push(OpenLoop {
             root_label: root_label.to_string(),
             repo_name: repo_name.clone(),
-            repo_path: repo.to_path_buf(),
+            repo_path,
             branch: branch.to_string(),
             head_sha: sha.to_string(),
             last_commit,
@@ -524,6 +535,48 @@ mod tests {
         assert_eq!(l.ahead, 1);
         assert_eq!(l.behind, 0);
         assert_eq!(l.head_sha.len(), 40);
+    }
+
+    #[test]
+    fn open_loops_sets_repo_path_to_worktree_when_branch_checked_out() {
+        let tmp = tempfile::tempdir().unwrap();
+        let container = tmp.path().join("my-app");
+        testutil::init_bare_worktree_container(&container);
+        testutil::add_worktree_with_commit(&container, "feat-x", "feat/x", "x.txt");
+
+        let loops = open_loops(&container, "root").unwrap();
+        let lp = loops
+            .iter()
+            .find(|l| l.branch == "feat/x")
+            .expect("feat/x loop");
+        assert_eq!(lp.repo_path, container.join("feat-x"));
+    }
+
+    #[test]
+    fn open_loops_falls_back_to_container_when_branch_has_no_worktree() {
+        let tmp = tempfile::tempdir().unwrap();
+        let container = tmp.path().join("my-app");
+        testutil::init_bare_worktree_container(&container);
+        // feat/y exists in the store but is NOT checked out in any worktree
+        testutil::add_branch_on_bare(&container.join(".bare"), "feat/y", "y.txt");
+
+        let loops = open_loops(&container, "root").unwrap();
+        let lp = loops
+            .iter()
+            .find(|l| l.branch == "feat/y")
+            .expect("feat/y loop");
+        assert_eq!(lp.repo_path, container);
+    }
+
+    #[test]
+    fn open_loops_normal_repo_keeps_repo_path_as_repo_dir() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path().join("app");
+        testutil::init_repo(&repo);
+        testutil::add_branch_with_commit(&repo, "feat/x", "x.txt"); // checks out feat/x then back to main
+        let loops = open_loops(&repo, "root").unwrap();
+        assert_eq!(loops[0].branch, "feat/x");
+        assert_eq!(loops[0].repo_path, repo); // not checked out in a worktree → fallback
     }
 
     #[test]
