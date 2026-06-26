@@ -10,17 +10,24 @@ Track fino das fases pendentes. Ordem = sequência de execução recomendada
 | Query engine, contexts, reports, inventory | [ADR 0003 — query engine](docs/decisions/0003-query-engine.md) |
 | Descoberta bare + worktree | [Spec Fase A — scanner bare+worktree](docs/superpowers/specs/2026-06-25-scanner-bare-worktree-discovery.md) |
 | Atribuição de sessão por worktree | [Spec Fase B — worktree session attribution](docs/superpowers/specs/2026-06-25-worktree-session-attribution.md) |
+| CI hardening (WAVE 1) | [Spec CI hardening](docs/superpowers/specs/2026-06-25-ci-hardening-design.md) |
+| Release artefato + automação (WAVE 2/3) | [Spec release completeness](docs/superpowers/specs/2026-06-26-release-completeness-automation-design.md) |
+| Maturidade da lib + saúde OSS (WAVE 4) | [Spec library maturity](docs/superpowers/specs/2026-06-26-library-maturity-oss-health-design.md) |
 
 ## Regras de ordenação (travadas)
 
-- **Spec Fase A antes de tudo** — hoje `find_repos` acha **zero** repos no layout
-  bare+worktree do autor; toda fase do query engine é inútil sobre um scan vazio.
+- **Spec Fase A antes do query engine avançado** — descoberta bare+worktree era pré-requisito
+  do scan; concluída (✅).
 - **Spec Fase A antes da ADR fase 3** — o common-dir absoluto é a identidade do
   hash do inventory ([ADR 0003 §161](docs/decisions/0003-query-engine.md), Spec A §8).
 - **ADR fase 2 antes de 4 e 5** — contexts/reports precisam do push-down pra escopar.
 - **Spec Fase B depende da Fase A mergeada.**
+- **WAVE 1 (CI) antes de WAVE 2/3 (release)** — release-plz assume CI endurecido.
+- **WAVE 2/3 antes de WAVE 4** — badge crates.io e release-plz landados; erros tipados
+  e proptest desenhados para a matriz cross-OS do WAVE 1.
+- **WAVE 4 é ortogonal às fases ADR 2–6** — pode rodar em paralelo depois dos pré-reqs.
 
-## Sequência
+## Sequência — query engine
 
 ### ✅ Fase 1a — parser de query → ScanPlan  ·  [ADR 0003](docs/decisions/0003-query-engine.md)
 
@@ -40,7 +47,7 @@ Track fino das fases pendentes. Ordem = sequência de execução recomendada
 
 ### ✅ Spec Fase A — descoberta bare + worktree  ·  [Spec A](docs/superpowers/specs/2026-06-25-scanner-bare-worktree-discovery.md)
 
-**Próximo bloqueador.** Depende de: —
+Depende de: —
 
 - [x] `walk`: detectar `.git` arquivo **ou** diretório (`exists()` no lugar de `is_dir()`)
 - [x] `walk`: detectar bare por probe estrutural (`HEAD` + `objects/` + `refs/`)
@@ -57,23 +64,23 @@ Track fino das fases pendentes. Ordem = sequência de execução recomendada
 - [x] `just lint` + `just fmt` limpos; cobertura no gate
 - [x] CHANGELOG atualizado
 
-### ⬜ Spec Fase B — atribuição de sessão por worktree  ·  [Spec B](docs/superpowers/specs/2026-06-25-worktree-session-attribution.md)
+### ✅ Spec Fase B — atribuição de sessão por worktree  ·  [Spec B](docs/superpowers/specs/2026-06-25-worktree-session-attribution.md)
 
 Depende de: **Spec Fase A**
 
-- [ ] `worktree_map(repo)` parseia `git worktree list --porcelain` (helper puro testado)
-- [ ] `open_loops` resolve `repo_path` por branch (worktree se checada out, senão fallback container)
-- [ ] falha do `worktree list` → mapa vazio + warning (degrada, nunca aborta)
-- [ ] `sessions/claude_code.rs`: confirmar que `excerpts` só assume o cwd encodado
-- [ ] testes: parse porcelain, `open_loops` worktree vs sem-worktree, integração de sessão, regressão repo normal
-- [ ] validação manual: `loops resume <branch-em-worktree>` traz excerpts em `~/repo/pigz`
-- [ ] `docs/features.md`: casamento de sessão por worktree; ADR 0005 atualizado se necessário
-- [ ] `just lint` + `just fmt`; cobertura no gate
-- [ ] CHANGELOG atualizado
+- [x] `worktree_map(repo)` parseia `git worktree list --porcelain` (helper puro testado)
+- [x] `open_loops` resolve `repo_path` por branch (worktree se checada out, senão fallback container)
+- [x] falha do `worktree list` → mapa vazio + warning (degrada, nunca aborta)
+- [x] `sessions/claude_code.rs`: confirmar que `excerpts` só assume o cwd encodado
+- [x] testes: parse porcelain, `open_loops` worktree vs sem-worktree, integração de sessão, regressão repo normal
+- [x] validação manual: `loops resume <branch-em-worktree>` traz excerpts em `~/repo/pigz`
+- [x] `docs/features.md`: casamento de sessão por worktree; ADR 0005 atualizado se necessário
+- [x] `just lint` + `just fmt`; cobertura no gate
+- [x] CHANGELOG atualizado
 
 ### ⬜ ADR fase 2 — push-down + split fase leve/pesada  ·  [ADR 0003](docs/decisions/0003-query-engine.md)
 
-Depende de: **Spec Fase A** (scan que acha repos + `repo_name` final)
+**Próximo bloqueador (query engine).** Depende de: **Spec Fase A** (scan que acha repos + `repo_name` final)
 
 - [ ] wire do `ScanPlan` no scan
 - [ ] push-down de roots (subset de `cfg.roots` via `@`/`root:`)
@@ -122,3 +129,53 @@ Depende de: **Spec Fase A**, **ADR fase 2** (camada de filtro), reuso da coleta 
 - [ ] `loops worktrees [query]` usa a mesma camada parse → ScanPlan → filtro
 - [ ] reusa o parse de `worktree list --porcelain` (helper compartilhado com a Spec Fase B)
 - [ ] `resume` já é engine-based desde a fase 1b — sem trabalho extra
+
+## Sequência — infra & maturidade
+
+Trilha paralela ao query engine. Ordem entre waves travada em §Regras de ordenação.
+
+### ⬜ WAVE 1 — CI hardening  ·  [Spec](docs/superpowers/specs/2026-06-25-ci-hardening-design.md)
+
+Depende de: —
+
+- [ ] `ci.yml`: matriz ubuntu + macos + windows, `fail-fast: false`
+- [ ] job `msrv` em 1.89; `--locked` em clippy/test/msrv/coverage
+- [ ] `Swatinem/rust-cache` nos jobs que compilam
+- [ ] `concurrency` + env global (`RUSTFLAGS: "-D warnings"`, etc.)
+- [ ] `deny.toml` + job `audit` (cargo-deny, matriz advisories vs licenses)
+- [ ] `.github/dependabot.yml` (cargo + github-actions)
+- [ ] SHA-pin em todos os `uses:`
+- [ ] `test (windows-latest)` verde (corrigir falhas de path/CRLF se expostas)
+- [ ] README badges (CI, crates.io, MSRV, license)
+- [ ] ADR `0006-ci-msrv-cross-os.md`
+
+### ⬜ WAVE 2/3 — artefato de release + automação  ·  [Spec](docs/superpowers/specs/2026-06-26-release-completeness-automation-design.md)
+
+Depende de: **WAVE 1**
+
+- [ ] `build.rs`: completions (4 shells) + man page (`clap_mangen`)
+- [ ] `dist-workspace.toml`: empacota artefatos gerados + LICENSE/README/CHANGELOG no tarball
+- [ ] `Cargo.toml`: metadados crates.io (`rust-version`, `categories`, …) + `[profile.release]`
+- [ ] `release-plz.toml` + `.github/workflows/release-plz.yml` (PAT `RELEASE_PLZ_TOKEN`)
+- [ ] deletar `publish-crate.yml` (crates.io via release-plz)
+- [ ] release patch ponta-a-ponta: merge Release PR → tag → `release.yml` (cargo-dist)
+- [ ] ADR `0007-release-plz-cargo-dist-split.md`
+
+### ⬜ WAVE 4 — maturidade da lib + saúde OSS  ·  [Spec](docs/superpowers/specs/2026-06-26-library-maturity-oss-health-design.md)
+
+Depende de: **WAVE 1**, **WAVE 2/3**
+
+#### 4.1 — Error typing (`thiserror`)
+- [ ] `src/error.rs` + migração completa (PRs 4.1a→d); `anyhow` só na borda CLI
+- [ ] testes com `matches!` em vez de string-matching de stderr
+
+#### 4.2 — Unit tests + proptest
+- [ ] proptest em `query.rs` (≥ 3 propriedades)
+- [ ] `build_prompt` com múltiplos excerpts; gate 85% no core
+
+#### 4.3 — Observabilidade
+- [ ] `tracing` na lib; `--verbose` / `RUST_LOG`; ADR `0008-typed-errors-tracing.md`
+
+#### 4.4 — Community health
+- [ ] `CONTRIBUTING.md`, `CODE_OF_CONDUCT.md`, `SECURITY.md`
+- [ ] README: badges + link contributing (se WAVE 1 ainda não cobriu badges)
