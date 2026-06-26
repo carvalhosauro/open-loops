@@ -1,0 +1,28 @@
+# GitHub Pages (legacy Jekyll) builds from repo root. Exclude paths that are not
+# site content — especially docs with git-cliff Liquid templates ({% ... %}).
+title: open-loops
+theme: jekyll-theme-primer
+markdown: GFM
+exclude:
+  - docs/
+  - scripts/
+  - src/
+  - tests/
+  - target/
+  - .agents/
+  - .github/
+  - AGENTS.md
+  - CLAUDE.md
+  - ROADMAP.md
+  - CHANGELOG.md
+  - cliff.toml
+  - release-plz.toml
+  - dist-workspace.toml
+  - deny.toml
+  - Cargo.toml
+  - Cargo.lock
+  - justfile
+  - lefthook.yml
+  - rust-toolchain.toml
+  - skills-lock.json
+  - build.rs
