@@ -1,6 +1,7 @@
 //! Distillation: builds the prompt with evidence (git + sessions) and calls the
 //! LLM via a configurable command (default "claude -p"). Injectable command means
 //! tests use `cat` and users can swap LLMs without changing code.
+use crate::output;
 use crate::scanner::OpenLoop;
 use crate::sessions::SessionExcerpt;
 use anyhow::{bail, Context, Result};
@@ -186,9 +187,7 @@ fn session_match_tags(e: &SessionExcerpt) -> String {
 }
 
 fn format_ab(ahead: Option<u32>, behind: Option<u32>) -> String {
-    let a = ahead.map(|n| n.to_string()).unwrap_or_else(|| "-".into());
-    let b = behind.map(|n| n.to_string()).unwrap_or_else(|| "-".into());
-    format!("{a}, behind: {b}")
+    format!("{}, behind: {}", output::fmt_count(ahead), output::fmt_count(behind))
 }
 
 /// Shows git and session evidence that would feed distillation, without calling the LLM.

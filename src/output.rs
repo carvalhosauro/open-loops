@@ -21,7 +21,7 @@ pub fn human_age(now: DateTime<Utc>, then: DateTime<Utc>) -> String {
     }
 }
 
-fn fmt_count(v: Option<u32>) -> String {
+pub fn fmt_count(v: Option<u32>) -> String {
     v.map(|n| n.to_string()).unwrap_or_else(|| "-".into())
 }
 

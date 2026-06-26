@@ -152,7 +152,10 @@ pub fn scan_worktrees(roots: &[PathBuf], scan_depth: usize) -> (Vec<Worktree>, V
     let results: Vec<Result<Vec<Worktree>>> = std::thread::scope(|s| {
         let handles: Vec<_> = repos
             .iter()
-            .map(|r| s.spawn(move || worktrees(r)))
+            .map(|r| {
+                let path = r.path.clone();
+                s.spawn(move || worktrees(&path))
+            })
             .collect();
         handles
             .into_iter()
@@ -166,7 +169,7 @@ pub fn scan_worktrees(roots: &[PathBuf], scan_depth: usize) -> (Vec<Worktree>, V
     for (repo, res) in repos.iter().zip(results) {
         match res {
             Ok(mut w) => all.append(&mut w),
-            Err(e) => warnings.push(format!("{}: {e:#}", repo.display())),
+            Err(e) => warnings.push(format!("{}: {e:#}", repo.path.display())),
         }
     }
     (all, warnings)

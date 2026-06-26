@@ -59,6 +59,14 @@ pub fn default_branch(repo: &Path) -> Result<String> {
     )
 }
 
+/// A git repository discovered under a configured root (deduped by common-dir).
+#[derive(Debug, Clone)]
+pub struct RepoCandidate {
+    pub path: PathBuf,
+    /// Canonical repo name from `--git-common-dir` (computed once during dedup).
+    pub repo_name: String,
+}
+
 /// An open loop: an unmerged branch with its own commits.
 #[derive(Debug, Clone)]
 pub struct OpenLoop {
@@ -182,7 +190,7 @@ pub fn worktree_map(repo: &Path) -> Result<std::collections::HashMap<String, Pat
 
 /// Walks roots up to `scan_depth` looking for git repo candidates, then
 /// deduplicates by absolute `--git-common-dir`.
-pub fn find_repos(roots: &[PathBuf], scan_depth: usize) -> (Vec<PathBuf>, Vec<String>) {
+pub fn find_repos(roots: &[PathBuf], scan_depth: usize) -> (Vec<RepoCandidate>, Vec<String>) {
     let mut candidates = Vec::new();
     for root in roots {
         walk(root, 0, scan_depth, &mut candidates);
@@ -190,22 +198,28 @@ pub fn find_repos(roots: &[PathBuf], scan_depth: usize) -> (Vec<PathBuf>, Vec<St
     dedup_candidates(candidates)
 }
 
-fn dedup_candidates(candidates: Vec<PathBuf>) -> (Vec<PathBuf>, Vec<String>) {
+fn dedup_candidates(candidates: Vec<PathBuf>) -> (Vec<RepoCandidate>, Vec<String>) {
     use std::collections::HashMap;
-    let mut by_common: HashMap<PathBuf, PathBuf> = HashMap::new();
+    let mut by_common: HashMap<PathBuf, RepoCandidate> = HashMap::new();
     let mut warnings = Vec::new();
     for candidate in candidates {
         match git_common_dir(&candidate) {
             Ok(common) => {
-                by_common.entry(common).or_insert(candidate);
+                let repo_name = repo_name_from_common_dir(&common);
+                by_common
+                    .entry(common)
+                    .or_insert(RepoCandidate {
+                        path: candidate,
+                        repo_name,
+                    });
             }
             Err(e) => {
                 warnings.push(format!("{}: {e:#}", candidate.display()));
             }
         }
     }
-    let mut repos: Vec<PathBuf> = by_common.into_values().collect();
-    repos.sort();
+    let mut repos: Vec<RepoCandidate> = by_common.into_values().collect();
+    repos.sort_by(|a, b| a.path.cmp(&b.path));
     (repos, warnings)
 }
 
@@ -231,20 +245,14 @@ fn walk(dir: &Path, depth: usize, scan_depth: usize, candidates: &mut Vec<PathBu
     }
 }
 
-/// Path-based repo name hint for push-down filtering before any git I/O.
+/// Path-based repo name guess when `git rev-parse --git-common-dir` fails.
+/// Primary naming comes from common-dir during dedup; this is the error fallback only.
 pub fn repo_name_hint(path: &Path) -> String {
     let base = path
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_default();
     base.strip_suffix(".git").map(str::to_owned).unwrap_or(base)
-}
-
-fn matches_repo_filter(path: &Path, filter: &str) -> bool {
-    let name = git_common_dir(path)
-        .map(|cd| repo_name_from_common_dir(&cd))
-        .unwrap_or_else(|_| repo_name_hint(path));
-    name.to_lowercase().contains(&filter.to_lowercase())
 }
 
 /// Returns all unmerged branches (except default) in a repo.
@@ -332,8 +340,8 @@ pub fn open_loops(repo: &Path, root_label: &str, need_ahead_behind: bool) -> Res
 
 /// Scans all repos found under the roots in parallel.
 ///
-/// `repo_filter`, when set, retains only repos whose path-based name hint matches
-/// before any per-repo git work. Individual repo failures become warnings and
+/// `repo_filter`, when set, retains only repos whose canonical name (from dedup)
+/// matches before `open_loops` runs. Individual repo failures become warnings and
 /// never abort the scan.
 pub fn scan(
     roots: &[PathBuf],
@@ -344,14 +352,16 @@ pub fn scan(
 ) -> (Vec<OpenLoop>, Vec<String>) {
     let (mut repos, mut warnings) = find_repos(roots, scan_depth);
     if let Some(filter) = repo_filter {
-        repos.retain(|repo| matches_repo_filter(repo, filter));
+        let needle = filter.to_lowercase();
+        repos.retain(|r| r.repo_name.to_lowercase().contains(&needle));
     }
     let results: Vec<Result<Vec<OpenLoop>>> = std::thread::scope(|s| {
         let handles: Vec<_> = repos
             .iter()
             .map(|repo| {
-                let label = crate::config::label_for_repo(labels, repo);
-                s.spawn(move || open_loops(repo, &label, need_ahead_behind))
+                let label = crate::config::label_for_repo(labels, &repo.path);
+                let path = repo.path.clone();
+                s.spawn(move || open_loops(&path, &label, need_ahead_behind))
             })
             .collect();
         handles
@@ -366,7 +376,7 @@ pub fn scan(
     for (repo, res) in repos.iter().zip(results) {
         match res {
             Ok(mut loops) => all.append(&mut loops),
-            Err(e) => warnings.push(format!("{}: {e:#}", repo.display())),
+            Err(e) => warnings.push(format!("{}: {e:#}", repo.path.display())),
         }
     }
     (all, warnings)
@@ -460,7 +470,7 @@ mod tests {
         let (repos, warnings) = find_repos(&[container.clone(), dev], 4);
         assert!(warnings.is_empty(), "unexpected warnings: {warnings:?}");
         assert_eq!(repos.len(), 1);
-        assert_eq!(repos[0], container);
+        assert_eq!(repos[0].path, container);
     }
 
     #[test]
@@ -474,7 +484,7 @@ mod tests {
         let (repos, _) = find_repos(&[tmp.path().to_path_buf()], 4);
         let names: Vec<_> = repos
             .iter()
-            .filter_map(|r| r.file_name())
+            .filter_map(|r| r.path.file_name())
             .map(|n| n.to_string_lossy().into_owned())
             .collect();
         assert!(names.contains(&"repo-deep".to_string()));
@@ -485,7 +495,7 @@ mod tests {
         let (shallow, _) = find_repos(&[tmp.path().to_path_buf()], 2);
         let shallow_names: Vec<_> = shallow
             .iter()
-            .filter_map(|r| r.file_name())
+            .filter_map(|r| r.path.file_name())
             .map(|n| n.to_string_lossy().into_owned())
             .collect();
         assert!(!shallow_names.contains(&"repo-deep".to_string()));
@@ -507,7 +517,7 @@ mod tests {
         testutil::init_bare_worktree_container(&container);
         let (repos, _) = find_repos(&[tmp.path().to_path_buf()], 4);
         assert_eq!(repos.len(), 1);
-        assert_eq!(repos[0], container);
+        assert_eq!(repos[0].path, container);
     }
 
     #[test]
@@ -518,7 +528,7 @@ mod tests {
         testutil::seed_bare_main(&bare);
         let (repos, _) = find_repos(&[tmp.path().to_path_buf()], 4);
         assert_eq!(repos.len(), 1);
-        assert_eq!(repos[0], bare);
+        assert_eq!(repos[0].path, bare);
     }
 
     #[test]
