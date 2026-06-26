@@ -1,6 +1,35 @@
 # Changelog
 ## unreleased
 
+## 1.2.0 - 2026-06-26
+
+### Docs
+- Add WAVE 2/3 implementation plan and honest ROADMAP status
+- ADR 0007 and release-plz workflow documentation
+
+### Features
+- Automate version bump and crates.io publish via release-plz
+- Bundle completions and man page in release archives
+- Generate shell completions and man page at compile time
+- Wire ScanPlan push-down and light/heavy git split
+
+### Fixes
+- Add rust toolchain to release-plz and exclude docs from Jekyll
+- Mirror cliff.toml into release-plz and gate dist-artifacts copy
+- Skip dist-artifacts staging during cargo publish verify
+- Resolve cli_command module path from cli.rs
+- Canonical path match for root: filter on Windows
+- Tighten root: filter matching to avoid path false positives
+- Address review — root tilde-expand, common-dir repo filter
+
+### Internals
+- Update Cargo.lock for clap_mangen build dependency
+- Add crates.io metadata and release profile
+- Extract shared clap command for build.rs
+- Apply cargo fmt
+- Reuse repo_name from dedup for repo: push-down
+- Add case-insensitive repo filter tests and ensure no matches yield empty results
+
 ### CI
 - Cross-OS test matrix (ubuntu, macos arm64, windows) with `fail-fast: false`
 - Dedicated MSRV job on Rust 1.89 (`cargo check --locked --all-targets`)
