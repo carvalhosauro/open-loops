@@ -31,4 +31,7 @@ is unchanged — only the source of `repo_name` changes.
 - Future inventory cache (ADR 0003 phase 3) should hash the absolute common-dir.
 - Isolated `.bare` dirs hidden under a dot-prefixed parent are not discovered
   unless a root points at them or the container `.git` pointer exists (documented).
-- Spec Fase B builds on this for per-worktree session attribution.
+- Spec Fase B (implemented) attributes AI sessions per worktree: `open_loops`
+  resolves `OpenLoop.repo_path` to the branch's worktree via `git worktree list`
+  (fallback: container/common-dir). The common-dir stays the dedup/identity
+  anchor; `repo_path` never enters the canonical key.
