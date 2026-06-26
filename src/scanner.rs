@@ -241,8 +241,10 @@ pub fn repo_name_hint(path: &Path) -> String {
 }
 
 fn matches_repo_filter(path: &Path, filter: &str) -> bool {
-    let hint = repo_name_hint(path);
-    hint.to_lowercase().contains(&filter.to_lowercase())
+    let name = git_common_dir(path)
+        .map(|cd| repo_name_from_common_dir(&cd))
+        .unwrap_or_else(|_| repo_name_hint(path));
+    name.to_lowercase().contains(&filter.to_lowercase())
 }
 
 /// Returns all unmerged branches (except default) in a repo.

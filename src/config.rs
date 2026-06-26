@@ -94,8 +94,9 @@ impl Config {
         Ok(out)
     }
 
-    /// Subset of configured roots matching `plan.root_filter` (label or path
-    /// substring, case-insensitive). Returns all roots when no filter is set.
+    /// Subset of configured roots matching `plan.root_filter`. Path values are
+    /// tilde-expanded and canonicalized, then matched as a prefix against roots
+    /// (ADR 0003). Label/path substring match is a fallback for short aliases.
     pub fn resolve_scan_roots(
         &self,
         plan: &crate::query::ScanPlan,
@@ -104,15 +105,36 @@ impl Config {
         let Some(filter) = &plan.root_filter else {
             return Ok(self.roots.clone());
         };
+        let mut prefix = expand_tilde(filter);
+        if prefix.exists() {
+            if let Ok(canon) = std::fs::canonicalize(&prefix) {
+                prefix = canon;
+            }
+        }
+        let prefix_str = prefix.to_string_lossy();
         let needle = filter.to_lowercase();
         Ok(labels
             .into_iter()
             .filter(|(root, label)| {
-                label.to_lowercase().contains(&needle)
+                root.starts_with(prefix_str.as_ref())
+                    || label.to_lowercase().contains(&needle)
                     || root.to_string_lossy().to_lowercase().contains(&needle)
             })
             .map(|(root, _)| root)
             .collect())
+    }
+}
+
+/// Expands a leading `~` to the home directory (ADR `root:` filter).
+fn expand_tilde(path: &str) -> std::path::PathBuf {
+    if let Some(rest) = path.strip_prefix("~/") {
+        dirs::home_dir()
+            .map(|h| h.join(rest))
+            .unwrap_or_else(|| std::path::PathBuf::from(path))
+    } else if path == "~" {
+        dirs::home_dir().unwrap_or_else(|| std::path::PathBuf::from(path))
+    } else {
+        std::path::PathBuf::from(path)
     }
 }
 
@@ -292,6 +314,27 @@ mod tests {
             .resolve_scan_roots(&crate::query::parse("root:personal").unwrap())
             .unwrap();
         assert_eq!(by_path, vec![personal]);
+    }
+
+    #[test]
+    fn resolve_scan_roots_tilde_expands_to_prefix_match() {
+        let home = dirs::home_dir().expect("home dir");
+        let tmp = tempfile::tempdir().unwrap();
+        let work = home.join(format!(
+            ".loops-test-{}",
+            tmp.path().file_name().unwrap().to_string_lossy()
+        ));
+        std::fs::create_dir_all(&work).unwrap();
+        let cfg = Config {
+            roots: vec![work.clone()],
+            ..Config::default()
+        };
+        let filter = format!("~/{}", work.file_name().unwrap().to_string_lossy());
+        let matched = cfg
+            .resolve_scan_roots(&crate::query::parse(&format!("root:{filter}")).unwrap())
+            .unwrap();
+        assert_eq!(matched, vec![work.clone()]);
+        let _ = std::fs::remove_dir_all(&work);
     }
 
     #[test]
