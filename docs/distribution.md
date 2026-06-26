@@ -44,6 +44,12 @@ cargo-dist builds a formula (`open-loops.rb`) and, with `tap` +
 `publish-jobs = ["homebrew"]` in `dist-workspace.toml`, commits it to the tap on
 each release.
 
+`release.yml` contains a small customization for the first release: if the tap
+repo exists but has no `main` branch yet, the workflow initializes it before
+publishing the formula. Keep `allow-dirty = ["ci"]` in `dist-workspace.toml`
+while that customization is present so `dist plan` accepts the checked-in
+workflow.
+
 **Verify** (after a tagged release):
 
 ```bash
