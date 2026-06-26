@@ -26,6 +26,11 @@ fn loops(home: &Path) -> Command {
     cmd
 }
 
+/// TOML basic strings treat `\` as escape; use forward slashes (valid on all OSes).
+fn toml_path(p: &Path) -> String {
+    p.display().to_string().replace('\\', "/")
+}
+
 #[test]
 fn full_flow_init_list_resume_cache_ignore() {
     let tmp = tempfile::tempdir().unwrap();
@@ -482,7 +487,8 @@ fn resume_includes_session_excerpt_for_branch_in_worktree() {
 
     // fake Claude Code session under the ENCODED WORKTREE path (not the container)
     let sessions = tmp.path().join("ai-sessions");
-    let proj = sessions.join(encode_project_path(&feat));
+    let feat_path = std::fs::canonicalize(&feat).unwrap_or(feat);
+    let proj = sessions.join(encode_project_path(&feat_path));
     std::fs::create_dir_all(&proj).unwrap();
     std::fs::write(
         proj.join("s.jsonl"),
@@ -502,7 +508,7 @@ fn resume_includes_session_excerpt_for_branch_in_worktree() {
         .lines()
         .map(|l| {
             if l.trim_start().starts_with("sessions_dir") {
-                format!("sessions_dir = \"{}\"", sessions.display())
+                format!("sessions_dir = \"{}\"", toml_path(&sessions))
             } else if l.trim_start().starts_with("llm_command") {
                 "llm_command = \"cat\"".to_string()
             } else {
