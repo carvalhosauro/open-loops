@@ -158,7 +158,7 @@ Depende de: **WAVE 1**
 - [x] `Cargo.toml`: metadados crates.io (`rust-version`, `categories`, …) + `[profile.release]`
 - [x] `release-plz.toml` + `.github/workflows/release-plz.yml` (PAT `RELEASE_PLZ_TOKEN`)
 - [x] deletar `publish-crate.yml` (crates.io via release-plz)
-- [x] release patch ponta-a-ponta: merge Release PR → tag → `release.yml` (cargo-dist)
+- [ ] release patch ponta-a-ponta: merge Release PR → tag → `release.yml` (infra pronta; validar após configurar `RELEASE_PLZ_TOKEN` e merge do primeiro Release PR)
 - [x] ADR `0007-release-plz-cargo-dist-split.md`
 
 ### ⬜ WAVE 4 — maturidade da lib + saúde OSS  ·  [Spec](docs/superpowers/specs/2026-06-26-library-maturity-oss-health-design.md)

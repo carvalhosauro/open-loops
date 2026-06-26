@@ -148,7 +148,8 @@ Jobs:
 - **`rust-toolchain.toml`** — **inalterado** (`1.89`); agora lastreado pelo job
   `msrv`.
 - **`README.md`** — badges: status do CI, versão crates.io, MSRV 1.89, licença.
-- **Inalterados:** `release.yml`, `publish-crate.yml`, lógica do CLI, `justfile`.
+- **Inalterados (neste spec):** `release.yml`, lógica do CLI. `publish-crate.yml` e fluxo
+  manual de changelog foram substituídos por release-plz em WAVE 2/3 (ADR 0007).
 
 ### No mapa (registro da decisão)
 
