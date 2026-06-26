@@ -4,7 +4,7 @@
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Config {
@@ -129,22 +129,46 @@ fn root_matches_filter(
     prefix: &std::path::Path,
 ) -> bool {
     // Canonical path prefix after tilde-expand (e.g. root:~/work).
-    if root.starts_with(prefix) {
+    if path_prefix_match(root, prefix) {
         return true;
     }
     // Alias shortcut (e.g. root:w) — exact label, not substring (avoids "w" ⊂ "personal").
     if label.eq_ignore_ascii_case(filter) {
         return true;
     }
-    // Path component / suffix (e.g. root:personal) — basename only, not the full temp path.
+    // Path tail after optional ~/ (e.g. root:~/work or root:personal).
+    let path_needle = needle
+        .strip_prefix("~/")
+        .or_else(|| needle.strip_prefix('~'))
+        .unwrap_or(needle);
+    // Path component — basename only, not the full temp path.
     if root
         .file_name()
-        .is_some_and(|n| n.to_string_lossy().to_lowercase().contains(needle))
+        .is_some_and(|n| n.to_string_lossy().eq_ignore_ascii_case(path_needle))
     {
         return true;
     }
     let root_str = root.to_string_lossy().to_lowercase();
-    root_str.ends_with(needle) || root_str.contains(&format!("/{needle}"))
+    root_str.ends_with(path_needle)
+        || root_str.contains(&format!("/{path_needle}"))
+        || root_str.contains(&format!("\\{path_needle}"))
+}
+
+/// Prefix/equality match tolerant of canonical vs non-canonical paths (Windows `\\?\`).
+fn path_prefix_match(root: &Path, prefix: &Path) -> bool {
+    if root == prefix || root.starts_with(prefix) || prefix.starts_with(root) {
+        return true;
+    }
+    let root_ok = root.exists();
+    let prefix_ok = prefix.exists();
+    if root_ok && prefix_ok {
+        if let (Ok(r), Ok(p)) = (std::fs::canonicalize(root), std::fs::canonicalize(prefix)) {
+            if r == p || r.starts_with(&p) || p.starts_with(&r) {
+                return true;
+            }
+        }
+    }
+    false
 }
 
 /// Expands a leading `~` to the home directory (ADR `root:` filter).
