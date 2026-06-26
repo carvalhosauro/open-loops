@@ -704,6 +704,25 @@ bare
     }
 
     #[test]
+    fn worktree_map_errors_on_non_git_dir() {
+        let tmp = tempfile::tempdir().unwrap();
+        // a plain directory is not a git repo → git worktree list fails
+        assert!(worktree_map(tmp.path()).is_err());
+    }
+
+    #[test]
+    fn parse_worktree_porcelain_ignores_lines_before_first_worktree() {
+        let out = "branch refs/heads/orphan\nHEAD deadbeef\nworktree /home/u/app/main\nbranch refs/heads/main\n";
+        let entries = parse_worktree_porcelain(out);
+        assert_eq!(entries.len(), 1);
+        assert_eq!(
+            entries[0].path,
+            std::path::PathBuf::from("/home/u/app/main")
+        );
+        assert_eq!(entries[0].branch.as_deref(), Some("main"));
+    }
+
+    #[test]
     fn repo_name_from_common_dir_table() {
         use std::path::Path;
 
