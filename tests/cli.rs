@@ -1,5 +1,6 @@
 //! E2E: real binary, real git repos, LLM replaced by `cat`.
 use assert_cmd::Command;
+use open_loops::sessions::claude_code::encode_project_path;
 use predicates::prelude::*;
 use std::path::Path;
 
@@ -481,8 +482,7 @@ fn resume_includes_session_excerpt_for_branch_in_worktree() {
 
     // fake Claude Code session under the ENCODED WORKTREE path (not the container)
     let sessions = tmp.path().join("ai-sessions");
-    let encoded = feat.to_string_lossy().replace(['/', '.'], "-");
-    let proj = sessions.join(&encoded);
+    let proj = sessions.join(encode_project_path(&feat));
     std::fs::create_dir_all(&proj).unwrap();
     std::fs::write(
         proj.join("s.jsonl"),
