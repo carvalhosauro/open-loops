@@ -232,4 +232,6 @@ Jobs:
 - [ ] ADR `0006-ci-msrv-cross-os.md` criado.
 - [ ] Nota de CI/MSRV em `CLAUDE.md`.
 - [ ] PR com todos os jobs verdes nos dois SOs; cache populando.
-- [ ] CHANGELOG atualizado (git-cliff).
+- [ ] ~~CHANGELOG atualizado (git-cliff).~~ **Obsolete** — release-plz updates
+      `CHANGELOG.md` on Release PR merge (see ADR
+      [0007](docs/decisions/0007-release-plz-cargo-dist-split.md); WAVE 2/3).

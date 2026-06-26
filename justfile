@@ -20,6 +20,7 @@ cov:
     cargo llvm-cov --fail-under-lines 70
 
 # require: cargo install git-cliff
+# local preview only; release changelog is updated by release-plz on Release PR merge
 changelog:
     git cliff -o CHANGELOG.md
 

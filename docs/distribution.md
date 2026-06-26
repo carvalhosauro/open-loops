@@ -3,38 +3,49 @@
 `open-loops` ships as the `loops` binary through several channels. This document
 covers the **minimum setup** for `cargo install` (crates.io) and Homebrew (tap).
 
-Both channels trigger on a version tag (`vX.Y.Z` or `X.Y.Z`). Prerelease tags
-(with a `-` suffix, e.g. `v1.1.0-rc.1`) skip the publish steps.
-
 | Channel | User command | CI workflow | Secret |
 |---|---|---|---|
-| crates.io | `cargo install open-loops` | `publish-crate.yml` | `CARGO_REGISTRY_TOKEN` |
-| Homebrew | `brew install carvalhosauro/tap/open-loops` | `release.yml` (cargo-dist) | `HOMEBREW_TAP_TOKEN` |
+| crates.io | `cargo install open-loops` | `release-plz.yml` (on merge to `main`) | `CARGO_REGISTRY_TOKEN`, `RELEASE_PLZ_TOKEN` |
+| Homebrew | `brew install carvalhosauro/tap/open-loops` | `release.yml` (cargo-dist, on version tag) | `HOMEBREW_TAP_TOKEN` |
+
+Prerelease versions (suffix after patch, e.g. `1.1.0-rc.1`) are outside the
+default release-plz flow; handle manually if needed.
 
 ---
 
 ## One-time checklist
 
-Do these once before the first tagged release that should go live on both
-channels:
+Do these once before the first automated release:
 
 1. **crates.io** — log in at <https://crates.io>, create an API token at
    <https://crates.io/settings/tokens>, add it to this repo as
    **`CARGO_REGISTRY_TOKEN`**. The crate name `open-loops` must be owned by your
    account (first publish can be local: `cargo publish` with the token in env).
-2. **Homebrew tap** — create a public GitHub repo **`carvalhosauro/homebrew-tap`**
+2. **release-plz PAT** — create a fine-grained personal access token with
+   **Contents: Read and write** and **Pull requests: Read and write** on this
+   repo. Add it as **`RELEASE_PLZ_TOKEN`**. release-plz uses this PAT (not the
+   workflow `GITHUB_TOKEN`) to push the version tag after publish; otherwise
+   `release.yml` would not trigger (GitHub anti-loop rule). See ADR
+   [0007](decisions/0007-release-plz-cargo-dist-split.md).
+3. **Homebrew tap** — create a public GitHub repo **`carvalhosauro/homebrew-tap`**
    (empty is fine; cargo-dist fills `Formula/` on first release). Create a PAT
    with `repo` scope (or fine-grained `contents: read/write` on the tap) and add
    it here as **`HOMEBREW_TAP_TOKEN`**.
-3. **Tag a release** — bump `version` in `Cargo.toml`, update `CHANGELOG.md`,
-   commit, then:
 
-   ```bash
-   git tag vX.Y.Z && git push origin vX.Y.Z
-   ```
+---
 
-   CI runs `release.yml` (binaries + Homebrew formula) and `publish-crate.yml`
-   (`cargo publish`).
+## Release flow
+
+1. Conventional Commits land on `main`.
+2. **release-plz** (`.github/workflows/release-plz.yml`) opens a Release PR:
+   version bump in `Cargo.toml`, `CHANGELOG.md` update (from `cliff.toml`).
+3. Merge the Release PR → release-plz publishes to crates.io and pushes tag
+   `vX.Y.Z` using `RELEASE_PLZ_TOKEN`.
+4. The tag triggers **`release.yml`** → cargo-dist builds binaries, updates the
+   Homebrew formula, and creates the GitHub Release.
+
+Local preview: `just changelog` (git-cliff) — does **not** replace the
+release-plz changelog step.
 
 ---
 
@@ -62,9 +73,9 @@ loops --version
 
 ## crates.io
 
-cargo-dist does not publish Rust library/binary crates to crates.io; the
-dedicated workflow verifies tag ↔ `Cargo.toml` version, skips if already
-published, then runs `cargo publish --locked`.
+release-plz publishes the crate on merge of the Release PR (`cargo publish
+--locked` via `CARGO_REGISTRY_TOKEN`). The former `publish-crate.yml` workflow
+was removed in favor of release-plz.
 
 **Verify**:
 
