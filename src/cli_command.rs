@@ -11,6 +11,9 @@ pub struct Cli {
     /// Filter the inventory (e.g. `loops api idle:>7d`). See ADR 0003 grammar.
     #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
     pub query: Vec<String>,
+    /// Ignore cached inventory memo and recompute ahead/behind from git
+    #[arg(long)]
+    pub fresh: bool,
 }
 
 #[derive(Subcommand)]
@@ -23,6 +26,9 @@ pub enum Command {
         /// Show matched git commits and AI sessions without calling the LLM
         #[arg(long)]
         dry_run: bool,
+        /// Ignore cached inventory memo and recompute ahead/behind from git
+        #[arg(long)]
+        fresh: bool,
     },
     /// Drop a dead loop from the list (repo/branch format)
     Ignore { key: String },
@@ -31,4 +37,9 @@ pub enum Command {
     Worktrees,
     /// Generate a shell completion script (bash, zsh, fish, ...)
     Completions { shell: clap_complete::Shell },
+    /// Reindex the ahead/behind inventory for all repos (or those matching a query)
+    Refresh {
+        /// Optional query to scope the refresh (same syntax as `loops [query]`)
+        query: Vec<String>,
+    },
 }

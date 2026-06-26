@@ -6,10 +6,12 @@ pub use cli_command::{Cli, Command};
 use crate::config::Store;
 use crate::distill::Confidence;
 use crate::ignores::Ignores;
-use crate::scanner::{self, OpenLoop};
+use crate::inventory::InventoryStore;
+use crate::scanner::{self, OpenLoop, ScanOptions};
 use crate::{cache, distill, output, sessions, worktrees};
 use anyhow::{bail, ensure, Result};
 use sessions::{SessionExcerpt, SessionSource};
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 struct ResumeEvidence {
@@ -24,7 +26,26 @@ fn progress(msg: &str) {
     eprintln!("{msg}");
 }
 
-fn resolve_loop(base: &Path, query: &str) -> Result<OpenLoop> {
+/// Writes inventory updates produced by a scan to disk and returns the set of
+/// hashes that were touched (for orphan pruning in `run_refresh`).
+fn write_inventory(
+    inv_store: &InventoryStore,
+    updates: Vec<(String, crate::inventory::InventoryFile)>,
+) -> HashSet<String> {
+    let mut hashes = HashSet::new();
+    for (hash, file) in updates {
+        hashes.insert(hash.clone());
+        if let Err(e) = inv_store.save(&hash, &file) {
+            eprintln!(
+                "warning: failed to write inventory for {}: {e:#}",
+                file.repo_path.display()
+            );
+        }
+    }
+    hashes
+}
+
+fn resolve_loop(base: &Path, query: &str, fresh: bool) -> Result<OpenLoop> {
     let store = Store::new(base.to_path_buf());
     let cfg = store.load()?;
     ensure!(
@@ -35,16 +56,24 @@ fn resolve_loop(base: &Path, query: &str) -> Result<OpenLoop> {
     plan.include_ignored = true; // resume can target an ignored loop by key
     let labels = cfg.resolve_labels()?;
     let roots = cfg.resolve_scan_roots(&plan)?;
-    let (found, warnings) = scanner::scan(
+    let inv_store = InventoryStore::new(base);
+    let opts = ScanOptions {
+        need_ahead_behind: plan.need_ahead_behind,
+        fresh,
+        inventory_dir: Some(inv_store.dir.clone()),
+        inventory_ttl_secs: cfg.inventory_ttl_secs,
+    };
+    let (found, warnings, inv_updates) = scanner::scan(
         &roots,
         &labels,
         cfg.scan_depth,
-        plan.need_ahead_behind,
+        &opts,
         plan.repo_filter.as_deref(),
     );
     for w in &warnings {
         eprintln!("warning: {w}");
     }
+    write_inventory(&inv_store, inv_updates);
     let now = chrono::Utc::now();
     let matches: Vec<&OpenLoop> = found
         .iter()
@@ -106,7 +135,7 @@ fn gather_resume_evidence(base: &Path, lp: &OpenLoop) -> Result<ResumeEvidence> 
     })
 }
 
-pub fn run_list(base: &Path, query: &str) -> Result<()> {
+pub fn run_list(base: &Path, query: &str, fresh: bool) -> Result<()> {
     let store = Store::new(base.to_path_buf());
     let cfg = store.load()?;
     ensure!(
@@ -118,16 +147,24 @@ pub fn run_list(base: &Path, query: &str) -> Result<()> {
     let labels = cfg.resolve_labels()?;
     let roots = cfg.resolve_scan_roots(&plan)?;
     progress("scanning git repositories…");
-    let (found, warnings) = scanner::scan(
+    let inv_store = InventoryStore::new(base);
+    let opts = ScanOptions {
+        need_ahead_behind: true,
+        fresh,
+        inventory_dir: Some(inv_store.dir.clone()),
+        inventory_ttl_secs: cfg.inventory_ttl_secs,
+    };
+    let (found, warnings, inv_updates) = scanner::scan(
         &roots,
         &labels,
         cfg.scan_depth,
-        plan.need_ahead_behind,
+        &opts,
         plan.repo_filter.as_deref(),
     );
     for w in &warnings {
         eprintln!("warning: {w}");
     }
+    write_inventory(&inv_store, inv_updates);
     let ignores = Ignores::load(base)?;
     let now = chrono::Utc::now();
     let visible: Vec<OpenLoop> = found
@@ -179,9 +216,9 @@ pub fn run_ignore(base: &Path, key: &str) -> Result<()> {
     Ok(())
 }
 
-pub fn run_resume(base: &Path, query: &str, dry_run: bool) -> Result<()> {
+pub fn run_resume(base: &Path, query: &str, dry_run: bool, fresh: bool) -> Result<()> {
     progress("scanning git…");
-    let lp = resolve_loop(base, query)?;
+    let lp = resolve_loop(base, query, fresh)?;
 
     if dry_run {
         let evidence = gather_resume_evidence(base, &lp)?;
@@ -218,6 +255,43 @@ pub fn run_resume(base: &Path, query: &str, dry_run: bool) -> Result<()> {
     let doc = distill::with_sources(&answer, &lp, &evidence.excerpts, evidence.confidence);
     cache.put(&lp, &doc)?;
     println!("{doc}");
+    Ok(())
+}
+
+/// Reindexes ahead/behind for all repos matching `query` (or all repos when
+/// `query` is empty), writes the updated inventory, and prunes orphan files.
+pub fn run_refresh(base: &Path, query: &str) -> Result<()> {
+    let store = Store::new(base.to_path_buf());
+    let cfg = store.load()?;
+    ensure!(
+        !cfg.roots.is_empty(),
+        "no roots configured. Run: loops init <dir-with-your-repos>"
+    );
+    let plan = crate::query::parse(query)?;
+    let labels = cfg.resolve_labels()?;
+    let roots = cfg.resolve_scan_roots(&plan)?;
+    progress("scanning git repositories…");
+    let inv_store = InventoryStore::new(base);
+    let opts = ScanOptions {
+        need_ahead_behind: true,
+        fresh: true, // refresh always recomputes — ignores any cached memo
+        inventory_dir: Some(inv_store.dir.clone()),
+        inventory_ttl_secs: cfg.inventory_ttl_secs,
+    };
+    let (_, warnings, inv_updates) = scanner::scan(
+        &roots,
+        &labels,
+        cfg.scan_depth,
+        &opts,
+        plan.repo_filter.as_deref(),
+    );
+    for w in &warnings {
+        eprintln!("warning: {w}");
+    }
+    let n = inv_updates.len();
+    let active_hashes = write_inventory(&inv_store, inv_updates);
+    inv_store.prune_orphans(&active_hashes)?;
+    eprintln!("refreshed {n} repos");
     Ok(())
 }
 
