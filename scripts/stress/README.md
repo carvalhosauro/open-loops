@@ -118,12 +118,17 @@ the file size — a *good* regression worth recording as a new baseline.
 
 ## Known bottlenecks
 
-Tracked in GitHub issues (numbers filled in by the controller):
+Found by the `--heavy` run, tracked in GitHub issues:
 
 - **Per-branch `rev-list --left-right --count`** dominates `many-branches`
-  (~7.8 s of the 10.0 s at 2000 branches): one git invocation per branch. See #TBD.
+  (~7.8 s of the 10.0 s at 2000 branches): one git invocation per branch. #13
 - **Whole-session read into memory** for `resume`: RSS tracks the session file
-  size (300 MB session → ~296 MB RSS) instead of streaming the tail window. See #TBD.
+  size (300 MB session → ~296 MB RSS) instead of streaming the tail window. #14
+- **Silent drop of the real session** when many same-mtime/garbage files exist
+  (sort is mtime-only + `truncate` before filtering empties). Correctness, not perf. #15
+- **Unbounded thread fan-out** in `scan` (~1 thread per repo, no pool cap). #16
+- **Serial `git_common_dir` dedup** in `find_repos` (~28% of a 300-repo run). #17
+- **`loops worktrees` does 2 serial git calls per worktree** (150 wt → 2.59 s). #18
 
 ## Files
 
