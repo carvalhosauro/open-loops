@@ -109,16 +109,23 @@ impl InventoryStore {
             if stem.starts_with('.') {
                 continue;
             }
-            // A loadable file whose repo is gone is an orphan. An unreadable
-            // file (corrupt/empty) can't prove its repo exists, so reclaim it
-            // too — but label it accurately instead of calling it an orphan.
-            let reason = match self.load(&stem) {
+            // Parse directly rather than via `load` (which warns), so an
+            // unreadable file yields only this one line — not a contradictory
+            // `corrupt …; ignoring` followed by `removed …`. A loadable file
+            // whose repo is gone is an orphan; an unreadable file can't prove its
+            // repo exists, so reclaim it too, labelled honestly.
+            let parsed = std::fs::read_to_string(&path)
+                .ok()
+                .and_then(|raw| serde_json::from_str::<InventoryFile>(&raw).ok());
+            let reason = match parsed {
                 Some(f) if f.repo_path.exists() => continue,
                 Some(_) => "orphan",
                 None => "unreadable",
             };
             match std::fs::remove_file(&path) {
                 Ok(()) => eprintln!("warning: removed {reason} inventory {}", path.display()),
+                // A concurrent prune already removed it — not worth a warning.
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
                 Err(e) => eprintln!(
                     "warning: failed to remove {reason} inventory {}: {e:#}",
                     path.display()
@@ -457,6 +464,32 @@ mod tests {
         store.prune_orphans().unwrap();
 
         assert!(!path_for_hash(&store.dir, hash).exists());
+    }
+
+    #[test]
+    fn prune_orphans_distinguishes_live_orphan_and_unreadable() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = InventoryStore::new(tmp.path());
+        std::fs::create_dir_all(&store.dir).unwrap();
+        // live + valid → kept (repo_path is the tempdir, which exists)
+        store
+            .save(
+                "live000000000000",
+                &make_file(tmp.path().to_str().unwrap(), vec![]),
+            )
+            .unwrap();
+        // valid but repo gone → orphan → removed
+        store
+            .save("orphan0000000000", &make_file("/no/such/repo/here", vec![]))
+            .unwrap();
+        // corrupt → unreadable → removed
+        std::fs::write(path_for_hash(&store.dir, "unreadable000000"), b"{ nope").unwrap();
+
+        store.prune_orphans().unwrap();
+
+        assert!(path_for_hash(&store.dir, "live000000000000").exists());
+        assert!(!path_for_hash(&store.dir, "orphan0000000000").exists());
+        assert!(!path_for_hash(&store.dir, "unreadable000000").exists());
     }
 
     #[test]
