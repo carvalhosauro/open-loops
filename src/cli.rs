@@ -21,6 +21,11 @@ struct ResumeEvidence {
     confidence: Confidence,
 }
 
+type ScanResult = (
+    Vec<OpenLoop>,
+    Vec<(String, crate::inventory::InventoryFile)>,
+);
+
 fn progress(msg: &str) {
     eprintln!("{msg}");
 }
@@ -40,6 +45,39 @@ fn write_inventory(
     }
 }
 
+/// Scans with inventory write-through and returns the found loops and raw inventory
+/// updates. Prints scan warnings to stderr. The caller may filter `inv_updates`
+/// before writing (as in `run_refresh`) or write them directly (as in `resolve_loop`
+/// and `run_list`).
+fn scan_with_inventory(
+    base: &Path,
+    cfg: &crate::config::Config,
+    plan: &crate::query::ScanPlan,
+    roots: &[PathBuf],
+    labels: &[(PathBuf, String)],
+    need_ahead_behind: bool,
+    fresh: bool,
+) -> Result<ScanResult> {
+    let inv_store = InventoryStore::new(base);
+    let opts = ScanOptions {
+        need_ahead_behind,
+        fresh,
+        inventory_dir: Some(inv_store.dir.clone()),
+        inventory_ttl_secs: cfg.inventory_ttl_secs,
+    };
+    let (found, warnings, inv_updates) = scanner::scan(
+        roots,
+        labels,
+        cfg.scan_depth,
+        &opts,
+        plan.repo_filter.as_deref(),
+    );
+    for w in &warnings {
+        eprintln!("warning: {w}");
+    }
+    Ok((found, inv_updates))
+}
+
 fn resolve_loop(base: &Path, query: &str, fresh: bool) -> Result<OpenLoop> {
     let store = Store::new(base.to_path_buf());
     let cfg = store.load()?;
@@ -52,22 +90,15 @@ fn resolve_loop(base: &Path, query: &str, fresh: bool) -> Result<OpenLoop> {
     let labels = cfg.resolve_labels()?;
     let roots = cfg.resolve_scan_roots(&plan)?;
     let inv_store = InventoryStore::new(base);
-    let opts = ScanOptions {
-        need_ahead_behind: plan.need_ahead_behind,
-        fresh,
-        inventory_dir: Some(inv_store.dir.clone()),
-        inventory_ttl_secs: cfg.inventory_ttl_secs,
-    };
-    let (found, warnings, inv_updates) = scanner::scan(
+    let (found, inv_updates) = scan_with_inventory(
+        base,
+        &cfg,
+        &plan,
         &roots,
         &labels,
-        cfg.scan_depth,
-        &opts,
-        plan.repo_filter.as_deref(),
-    );
-    for w in &warnings {
-        eprintln!("warning: {w}");
-    }
+        plan.need_ahead_behind,
+        fresh,
+    )?;
     write_inventory(&inv_store, inv_updates);
     let now = chrono::Utc::now();
     let matches: Vec<&OpenLoop> = found
@@ -143,22 +174,10 @@ pub fn run_list(base: &Path, query: &str, fresh: bool) -> Result<()> {
     let roots = cfg.resolve_scan_roots(&plan)?;
     progress("scanning git repositories…");
     let inv_store = InventoryStore::new(base);
-    let opts = ScanOptions {
-        need_ahead_behind: true,
+    let (found, inv_updates) = scan_with_inventory(
+        base, &cfg, &plan, &roots, &labels, true, // need_ahead_behind
         fresh,
-        inventory_dir: Some(inv_store.dir.clone()),
-        inventory_ttl_secs: cfg.inventory_ttl_secs,
-    };
-    let (found, warnings, inv_updates) = scanner::scan(
-        &roots,
-        &labels,
-        cfg.scan_depth,
-        &opts,
-        plan.repo_filter.as_deref(),
-    );
-    for w in &warnings {
-        eprintln!("warning: {w}");
-    }
+    )?;
     write_inventory(&inv_store, inv_updates);
     let ignores = Ignores::load(base)?;
     let now = chrono::Utc::now();
@@ -267,22 +286,10 @@ pub fn run_refresh(base: &Path, query: &str) -> Result<()> {
     let roots = cfg.resolve_scan_roots(&plan)?;
     progress("scanning git repositories…");
     let inv_store = InventoryStore::new(base);
-    let opts = ScanOptions {
-        need_ahead_behind: true,
-        fresh: true, // refresh always recomputes — ignores any cached memo
-        inventory_dir: Some(inv_store.dir.clone()),
-        inventory_ttl_secs: cfg.inventory_ttl_secs,
-    };
-    let (found, warnings, inv_updates) = scanner::scan(
-        &roots,
-        &labels,
-        cfg.scan_depth,
-        &opts,
-        plan.repo_filter.as_deref(),
-    );
-    for w in &warnings {
-        eprintln!("warning: {w}");
-    }
+    let (found, inv_updates) = scan_with_inventory(
+        base, &cfg, &plan, &roots, &labels, true, // need_ahead_behind
+        true, // fresh: refresh always recomputes — ignores any cached memo
+    )?;
 
     // Scope the reindex to the loops the query would actually list. `repo:`/`root:`
     // are already pushed down into the scan, but bare terms and branch:/key:/idle:/
