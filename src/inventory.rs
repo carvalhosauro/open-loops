@@ -68,7 +68,7 @@ impl InventoryStore {
         std::fs::create_dir_all(&self.dir)
             .with_context(|| format!("creating inventory dir {}", self.dir.display()))?;
         let final_path = path_for_hash(&self.dir, hash);
-        let tmp_path = self.dir.join(format!(".{hash}.json.tmp"));
+        let tmp_path = tmp_path_for_hash(&self.dir, hash);
         let json = serde_json::to_string_pretty(file).context("serialising inventory file")?;
         std::fs::write(&tmp_path, &json)
             .with_context(|| format!("writing tmp inventory {}", tmp_path.display()))?;
@@ -77,10 +77,14 @@ impl InventoryStore {
         Ok(())
     }
 
-    /// Removes inventory files whose `repo_path` no longer exists on disk.
+    /// Reclaims inventory files whose `repo_path` no longer exists on disk.
     ///
-    /// Scoped refresh (e.g. `loops refresh api`) must not evict memos for repos
-    /// outside the query — only disk-gone repos are orphans.
+    /// This is a global garbage-collect, intentionally NOT scoped to the current
+    /// refresh query: a repo gone from disk is an orphan regardless of which
+    /// query triggered the refresh, so its stale memo is always removed. Repos
+    /// that are merely outside the query but still present on disk are kept —
+    /// they are not orphans. Removal is self-healing: a returning repo is simply
+    /// recomputed on the next scan.
     ///
     /// Called lazily from `loops refresh` only (ADR 0004 pattern).
     pub fn prune_orphans(&self) -> Result<()> {
@@ -139,6 +143,17 @@ pub fn common_dir_hash(common_dir: &Path) -> String {
 /// Returns the path for a given hash in `dir`.
 pub fn path_for_hash(dir: &Path, hash: &str) -> PathBuf {
     dir.join(format!("{hash}.json"))
+}
+
+/// Per-process temporary path used by [`InventoryStore::save`].
+///
+/// The pid keeps the tmp name unique so two `loops` processes writing the same
+/// repo never race on one tmp file. The atomic rename already guarantees a
+/// reader never sees a partial file, but a *shared* tmp name made one writer's
+/// rename fail with ENOENT after the other renamed it away. Extension stays
+/// `tmp` (not `json`) so prune and listing skip it.
+fn tmp_path_for_hash(dir: &Path, hash: &str) -> PathBuf {
+    dir.join(format!(".{hash}.{}.json.tmp", std::process::id()))
 }
 
 /// Looks up the cached ahead/behind for a branch, validating SHA keys and TTL.
@@ -325,10 +340,104 @@ mod tests {
         let hash = "atomic0123456789";
         store.save(hash, &file).unwrap();
 
-        // No tmp file should remain after a successful save.
-        let tmp_path = store.dir.join(format!(".{hash}.json.tmp"));
-        assert!(!tmp_path.exists(), "tmp file should be renamed away");
+        // No tmp file (any pid suffix) should remain after a successful save.
+        let leftover_tmp = std::fs::read_dir(&store.dir)
+            .unwrap()
+            .flatten()
+            .any(|e| e.path().extension().is_some_and(|x| x == "tmp"));
+        assert!(!leftover_tmp, "tmp file should be renamed away");
         assert!(path_for_hash(&store.dir, hash).exists());
+    }
+
+    #[test]
+    fn save_tmp_name_is_unique_per_process() {
+        let p = tmp_path_for_hash(std::path::Path::new("/inv"), "abc123");
+        let name = p.file_name().unwrap().to_string_lossy();
+        // pid keeps two concurrent writers off the same tmp file (BUG-2 fix).
+        assert!(name.contains(&std::process::id().to_string()));
+        assert!(name.starts_with(".abc123."));
+        assert!(name.ends_with(".json.tmp"));
+        // Extension is `tmp`, so prune/listing (which key on `json`) skip it.
+        assert_eq!(p.extension().unwrap(), "tmp");
+    }
+
+    #[test]
+    fn lookup_returns_none_for_future_indexed_at() {
+        use chrono::Duration;
+        // Clock skew: indexed_at is in the future, so age is negative.
+        let future = Utc::now() + Duration::seconds(100);
+        let file = InventoryFile {
+            repo_path: PathBuf::from("/repo"),
+            indexed_at: future,
+            loops: vec![make_memo("feat/x", "h", "b", 1, 0)],
+        };
+        let result = lookup_ahead_behind(&file, "feat/x", "h", "b", 50, Utc::now());
+        assert!(result.is_none(), "negative age must be treated as a miss");
+    }
+
+    #[test]
+    fn store_load_returns_none_for_zero_byte_file() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = InventoryStore::new(tmp.path());
+        std::fs::create_dir_all(&store.dir).unwrap();
+        let hash = "zerobyte00000000";
+        std::fs::write(path_for_hash(&store.dir, hash), b"").unwrap();
+        assert!(store.load(hash).is_none());
+    }
+
+    #[test]
+    fn store_load_tolerates_unknown_extra_fields() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = InventoryStore::new(tmp.path());
+        std::fs::create_dir_all(&store.dir).unwrap();
+        let hash = "extrafields00000";
+        // Forward-compat: unknown top-level and per-memo fields are ignored.
+        let raw = r#"{
+            "repo_path": "/repo",
+            "indexed_at": "2020-01-01T00:00:00Z",
+            "future_field": 42,
+            "loops": [
+                {"branch":"feat/x","head_sha":"h","ab_base_sha":"b",
+                 "ahead":1,"behind":2,"bogus":true}
+            ]
+        }"#;
+        std::fs::write(path_for_hash(&store.dir, hash), raw).unwrap();
+        let loaded = store.load(hash).expect("unknown fields must not fail load");
+        assert_eq!(loaded.loops[0].ahead, 1);
+        assert_eq!(loaded.loops[0].behind, 2);
+    }
+
+    #[test]
+    fn store_load_returns_none_when_path_is_a_directory() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = InventoryStore::new(tmp.path());
+        std::fs::create_dir_all(&store.dir).unwrap();
+        let hash = "isadirectory0000";
+        // A directory sitting where the JSON file would be must not panic.
+        std::fs::create_dir(path_for_hash(&store.dir, hash)).unwrap();
+        assert!(store.load(hash).is_none());
+    }
+
+    #[test]
+    fn prune_orphans_skips_non_json_and_tmp_files() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = InventoryStore::new(tmp.path());
+        std::fs::create_dir_all(&store.dir).unwrap();
+
+        // An orphan JSON (repo_path missing) — must be removed.
+        let orphan = make_file("/nonexistent/repo", vec![]);
+        store.save("orphan0000000000", &orphan).unwrap();
+        // Non-JSON and tmp files — must survive (not inventory files).
+        let notes = store.dir.join("notes.txt");
+        std::fs::write(&notes, b"keep me").unwrap();
+        let leftover_tmp = store.dir.join(".something.json.tmp");
+        std::fs::write(&leftover_tmp, b"in-flight").unwrap();
+
+        store.prune_orphans().unwrap();
+
+        assert!(!path_for_hash(&store.dir, "orphan0000000000").exists());
+        assert!(notes.exists(), "non-json files must be left alone");
+        assert!(leftover_tmp.exists(), "tmp files must be left alone");
     }
 
     #[test]
