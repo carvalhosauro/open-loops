@@ -109,18 +109,20 @@ impl InventoryStore {
             if stem.starts_with('.') {
                 continue;
             }
-            let repo_exists = self
-                .load(&stem)
-                .map(|f| f.repo_path.exists())
-                .unwrap_or(false);
-            if !repo_exists {
-                match std::fs::remove_file(&path) {
-                    Ok(()) => eprintln!("warning: removed orphan inventory {}", path.display()),
-                    Err(e) => eprintln!(
-                        "warning: failed to remove orphan inventory {}: {e:#}",
-                        path.display()
-                    ),
-                }
+            // A loadable file whose repo is gone is an orphan. An unreadable
+            // file (corrupt/empty) can't prove its repo exists, so reclaim it
+            // too — but label it accurately instead of calling it an orphan.
+            let reason = match self.load(&stem) {
+                Some(f) if f.repo_path.exists() => continue,
+                Some(_) => "orphan",
+                None => "unreadable",
+            };
+            match std::fs::remove_file(&path) {
+                Ok(()) => eprintln!("warning: removed {reason} inventory {}", path.display()),
+                Err(e) => eprintln!(
+                    "warning: failed to remove {reason} inventory {}: {e:#}",
+                    path.display()
+                ),
             }
         }
         Ok(())
@@ -440,6 +442,21 @@ mod tests {
         assert!(!path_for_hash(&store.dir, "orphan0000000000").exists());
         assert!(notes.exists(), "non-json files must be left alone");
         assert!(leftover_tmp.exists(), "tmp files must be left alone");
+    }
+
+    #[test]
+    fn prune_orphans_reclaims_unreadable_file() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = InventoryStore::new(tmp.path());
+        std::fs::create_dir_all(&store.dir).unwrap();
+        // A corrupt file can't prove its repo exists, so prune reclaims it (it is
+        // labelled "unreadable" rather than misreported as an "orphan").
+        let hash = "corruptlive00000";
+        std::fs::write(path_for_hash(&store.dir, hash), b"{ broken json").unwrap();
+
+        store.prune_orphans().unwrap();
+
+        assert!(!path_for_hash(&store.dir, hash).exists());
     }
 
     #[test]
