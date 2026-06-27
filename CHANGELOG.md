@@ -9,6 +9,13 @@
 - Write-through on every scan including filtered queries (`loops api`)
 - Atomic inventory writes (tmp + rename) for concurrent-safe operation
 
+### Fixes
+- `loops refresh <term>` now scopes the reindex to the repos the query matches;
+  bare terms and `branch:`/`key:`/`idle:`/`ahead:`/`behind:` filters were ignored,
+  so every repo was reindexed (only `repo:`/`root:` were honored)
+- Inventory tmp file is now named per-process, avoiding a rename race (and its
+  spurious ENOENT warnings) when two `loops` runs write the same repo concurrently
+
 ### Internals
 - `ScanOptions` struct threads inventory context through scanner
 - `scan()` returns inventory updates for CLI-side write-through
