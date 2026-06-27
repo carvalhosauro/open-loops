@@ -634,6 +634,41 @@ mod tests {
     }
 
     #[test]
+    fn default_branch_honours_origin_head_when_target_is_local() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path().join("app");
+        testutil::init_repo(&repo); // main + commit
+        testutil::git(&repo, &["branch", "develop"]); // local develop exists
+        testutil::git(
+            &repo,
+            &[
+                "symbolic-ref",
+                "refs/remotes/origin/HEAD",
+                "refs/remotes/origin/develop",
+            ],
+        );
+        // origin/HEAD wins over main because its target resolves locally.
+        assert_eq!(default_branch(&repo).unwrap(), "develop");
+    }
+
+    #[test]
+    fn default_branch_falls_back_when_origin_head_target_missing() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path().join("app");
+        testutil::init_repo(&repo); // main + commit, no local "ghost"
+        testutil::git(
+            &repo,
+            &[
+                "symbolic-ref",
+                "refs/remotes/origin/HEAD",
+                "refs/remotes/origin/ghost",
+            ],
+        );
+        // Stale origin/HEAD target → fall through to main, not an error.
+        assert_eq!(default_branch(&repo).unwrap(), "main");
+    }
+
+    #[test]
     fn git_fails_with_contextual_message() {
         let tmp = tempfile::tempdir().unwrap();
         // directory is not a git repo
