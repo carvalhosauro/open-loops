@@ -671,3 +671,142 @@ fn resume_dry_run_skips_ahead_behind_without_attr_filter() {
         .success()
         .stdout(predicate::str::contains("ahead: -, behind: -"));
 }
+
+/// Creates `<root>/<name>` as a git repo on `main` plus one unmerged `feat/x`
+/// branch carrying a single extra commit (ahead 1, behind 0). File contents are
+/// keyed by `name` so each repo has distinct commit SHAs (identical trees +
+/// same-second commits would otherwise collide, which never happens for real
+/// repos but would for fixtures built in a tight loop).
+fn repo_with_feature(root: &Path, name: &str) {
+    let repo = root.join(name);
+    std::fs::create_dir_all(&repo).unwrap();
+    git(&repo, &["init", "-b", "main"]);
+    std::fs::write(repo.join("a.txt"), format!("base-{name}")).unwrap();
+    git(&repo, &["add", "."]);
+    git(&repo, &["commit", "-m", "init"]);
+    git(&repo, &["checkout", "-b", "feat/x"]);
+    std::fs::write(repo.join("b.txt"), format!("feat-{name}")).unwrap();
+    git(&repo, &["add", "."]);
+    git(&repo, &["commit", "-m", "feat"]);
+}
+
+/// `loops refresh <bare-word>` must scope the reindex to repos the same query
+/// would list — not reindex every repo. Regression for the bug where bare terms
+/// (which only filter in memory) were ignored by `run_refresh`, so the push-down
+/// filter was `None` and all repos were rewritten.
+#[test]
+fn refresh_bare_term_scopes_to_matching_repos() {
+    let tmp = tempfile::tempdir().unwrap();
+    let home = tmp.path().join("home");
+    let projects = tmp.path().join("projects");
+    for name in ["alpha", "beta", "gamma"] {
+        repo_with_feature(&projects, name);
+    }
+
+    loops(&home).arg("init").arg(&projects).assert().success();
+    loops(&home).assert().success();
+
+    // Bare term "beta" matches only the beta repo → reindex exactly one.
+    loops(&home)
+        .args(["refresh", "beta"])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("refreshed 1 repo"));
+
+    // The explicit repo: filter must agree.
+    loops(&home)
+        .args(["refresh", "repo:beta"])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("refreshed 1 repo"));
+
+    // Empty query still reindexes everything.
+    loops(&home)
+        .arg("refresh")
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("refreshed 3 repos"));
+}
+
+/// A disk-gone repo's inventory is reclaimed on ANY refresh, regardless of the
+/// query scope — `prune_orphans` is a deliberate global GC (commit 948446c).
+/// This exercises the disk-gone-out-of-scope path that
+/// `scoped_refresh_does_not_prune_other_inventory` (on-disk only) cannot.
+#[test]
+fn refresh_prunes_disk_gone_repo_even_when_out_of_scope() {
+    let tmp = tempfile::tempdir().unwrap();
+    let home = tmp.path().join("home");
+    let projects = tmp.path().join("projects");
+    for name in ["api-1", "api-2", "web-1"] {
+        repo_with_feature(&projects, name);
+    }
+
+    loops(&home).arg("init").arg(&projects).assert().success();
+    loops(&home).assert().success();
+
+    let inv_dir = home.join("inventory");
+    let count_json = || {
+        std::fs::read_dir(&inv_dir)
+            .unwrap()
+            .flatten()
+            .filter(|e| e.path().extension().is_some_and(|x| x == "json"))
+            .count()
+    };
+    assert_eq!(count_json(), 3, "one inventory file per repo");
+
+    // web-1 disappears from disk; it is now an orphan.
+    std::fs::remove_dir_all(projects.join("web-1")).unwrap();
+
+    // Scoped refresh that never scans web-1 still reclaims its orphan memo.
+    loops(&home)
+        .args(["refresh", "repo:api"])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("refreshed 2 repos"))
+        .stderr(predicate::str::contains("removed orphan inventory"));
+
+    assert_eq!(count_json(), 2, "disk-gone web-1 inventory must be pruned");
+}
+
+/// Proves the memo is actually read on a warm scan and that `--fresh` bypasses
+/// it: poison the cached `ahead` to 99, then use the query engine as an oracle —
+/// `loops ahead:99` matches only if the (wrong) memo was served, and
+/// `loops --fresh ahead:99` recomputes the real value (1) so nothing matches.
+#[test]
+fn cache_hit_serves_memo_and_fresh_recomputes() {
+    let tmp = tempfile::tempdir().unwrap();
+    let home = tmp.path().join("home");
+    let projects = tmp.path().join("projects");
+    repo_with_feature(&projects, "app");
+
+    loops(&home).arg("init").arg(&projects).assert().success();
+    loops(&home).assert().success();
+
+    // Poison the cached ahead count, preserving the SHA keys so the memo still
+    // validates and gets served.
+    let inv_dir = home.join("inventory");
+    let inv_file = std::fs::read_dir(&inv_dir)
+        .unwrap()
+        .flatten()
+        .find(|e| e.path().extension().is_some_and(|x| x == "json"))
+        .unwrap()
+        .path();
+    let mut json: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&inv_file).unwrap()).unwrap();
+    json["loops"][0]["ahead"] = serde_json::json!(99);
+    std::fs::write(&inv_file, serde_json::to_string(&json).unwrap()).unwrap();
+
+    // Warm scan serves the poisoned memo → ahead:99 matches.
+    loops(&home)
+        .arg("ahead:99")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("feat/x"));
+
+    // --fresh ignores the memo and recomputes ahead=1 → ahead:99 matches nothing.
+    loops(&home)
+        .args(["--fresh", "ahead:99"])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("No loops match"));
+}
