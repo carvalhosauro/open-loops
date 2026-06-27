@@ -273,7 +273,7 @@ pub fn run_refresh(base: &Path, query: &str) -> Result<()> {
         inventory_dir: Some(inv_store.dir.clone()),
         inventory_ttl_secs: cfg.inventory_ttl_secs,
     };
-    let (_, warnings, inv_updates) = scanner::scan(
+    let (found, warnings, inv_updates) = scanner::scan(
         &roots,
         &labels,
         cfg.scan_depth,
@@ -283,12 +283,65 @@ pub fn run_refresh(base: &Path, query: &str) -> Result<()> {
     for w in &warnings {
         eprintln!("warning: {w}");
     }
-    let n = inv_updates.len();
-    write_inventory(&inv_store, inv_updates);
+
+    // Scope the reindex to the loops the query would actually list. `repo:`/`root:`
+    // are already pushed down into the scan, but bare terms and branch:/key:/idle:/
+    // ahead:/behind: filters only narrow in memory — so apply them here too, or
+    // `loops refresh beta` would rewrite every repo instead of the matching ones.
+    // A repo is reindexed when at least one of its loops matches; we correlate a
+    // loop to its inventory file by HEAD sha (globally unique, and worktree-safe:
+    // two worktrees share one common-dir file but keep distinct branch HEADs).
+    let scoped = if has_in_memory_filter(&plan) {
+        let ignores = Ignores::load(base)?;
+        let now = chrono::Utc::now();
+        let matching: std::collections::HashSet<&str> = found
+            .iter()
+            .filter(|l| {
+                let key = l.key();
+                plan.matches(
+                    &crate::query::Candidate {
+                        repo_name: &l.repo_name,
+                        branch: &l.branch,
+                        key: &key,
+                        last_commit: l.last_commit,
+                        ahead: l.ahead,
+                        behind: l.behind,
+                        ignored: ignores.contains(&key),
+                    },
+                    now,
+                )
+            })
+            .map(|l| l.head_sha.as_str())
+            .collect();
+        inv_updates
+            .into_iter()
+            .filter(|(_, file)| {
+                file.loops
+                    .iter()
+                    .any(|m| matching.contains(m.head_sha.as_str()))
+            })
+            .collect()
+    } else {
+        inv_updates
+    };
+
+    let n = scoped.len();
+    write_inventory(&inv_store, scoped);
     inv_store.prune_orphans()?;
     let noun = if n == 1 { "repo" } else { "repos" };
     eprintln!("refreshed {n} {noun}");
     Ok(())
+}
+
+/// True when the plan carries filters that `scanner::scan` cannot push down to
+/// repo scope and that are only applied in memory (bare terms, branch/key
+/// substrings, attribute comparisons). When false, the `repo:`/`root:` push-down
+/// has already scoped the scan and every scanned repo is in scope.
+fn has_in_memory_filter(plan: &crate::query::ScanPlan) -> bool {
+    !plan.terms.is_empty()
+        || plan.branch_filter.is_some()
+        || plan.key_filter.is_some()
+        || !plan.attr_filters.is_empty()
 }
 
 pub fn run_completions(shell: clap_complete::Shell) -> Result<()> {
