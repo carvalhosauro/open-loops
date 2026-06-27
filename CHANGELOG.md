@@ -15,6 +15,10 @@
   so every repo was reindexed (only `repo:`/`root:` were honored)
 - Inventory tmp file is now named per-process, avoiding a rename race (and its
   spurious ENOENT warnings) when two `loops` runs write the same repo concurrently
+- A stale/`--single-branch` `origin/HEAD` pointing at a branch with no local ref
+  no longer hides the whole repo; default-branch detection falls back to main/master
+- `loops refresh` now reports an unreadable (corrupt/empty) inventory file as
+  `unreadable` rather than mislabeling it `orphan` when reclaiming it
 
 ### Internals
 - `ScanOptions` struct threads inventory context through scanner
