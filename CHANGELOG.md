@@ -1,6 +1,40 @@
 # Changelog
 ## unreleased
 
+## 1.3.0 - 2026-06-27
+
+### Docs
+- Changelog for origin/HEAD fallback and prune labeling fixes
+- Changelog for inventory cache fixes
+- Inventory cache and refresh (ADR 0003 phase 3)
+- Add ADR phase 3 inventory cache implementation plan
+
+### Features
+- Add loops refresh and --fresh flag
+- Integrate inventory memo in heavy phase
+- Add inventory_ttl_secs field (default 0 = SHA-only)
+- Add SHA-validated ahead/behind memo store
+
+### Fixes
+- Single prune message and silence concurrent-remove ENOENT
+- Label unreadable inventory distinctly when pruning
+- Fall back to main/master on stale origin/HEAD
+- Per-process tmp filename and global-GC prune doc
+- Scope loops refresh to the repos the query matches
+- Prune orphans only when repo path is gone
+
+### Internals
+- Reuse repo_with_feature and cover in-scope corrupt rewrite
+- Cover origin/HEAD honour and stale fallback
+- Refresh branch-filter scoping, no-match, worktree sharing, concurrency
+- Extract scan_with_inventory to dedup scan setup
+- Extract INVENTORY_EXT const and scope path_for_hash
+- Cover refresh scoping, orphan prune, and cache hit/fresh
+- Inventory cache write-through
+
+### Performance
+- Resolve default ref once; skip memo on blank base sha
+
 ### Features
 - `inventory.rs`: SHA-validated ahead/behind memo store at `~/.open-loops/inventory/<fnv64hex>.json`
 - `loops --fresh`: bypass inventory memo and recompute ahead/behind from git
