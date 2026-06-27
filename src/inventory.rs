@@ -9,6 +9,8 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
+const INVENTORY_EXT: &str = "json";
+
 /// One memoised ahead/behind entry for a branch.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct LoopMemo {
@@ -96,7 +98,7 @@ impl InventoryStore {
             .flatten()
         {
             let path = entry.path();
-            if path.extension().is_none_or(|e| e != "json") {
+            if path.extension().is_none_or(|e| e != INVENTORY_EXT) {
                 continue;
             }
             let stem = path
@@ -141,8 +143,8 @@ pub fn common_dir_hash(common_dir: &Path) -> String {
 }
 
 /// Returns the path for a given hash in `dir`.
-pub fn path_for_hash(dir: &Path, hash: &str) -> PathBuf {
-    dir.join(format!("{hash}.json"))
+pub(crate) fn path_for_hash(dir: &Path, hash: &str) -> PathBuf {
+    dir.join(format!("{hash}.{INVENTORY_EXT}"))
 }
 
 /// Per-process temporary path used by [`InventoryStore::save`].
