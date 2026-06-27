@@ -6,6 +6,24 @@ use chrono::{DateTime, Utc};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+use crate::inventory::{self, InventoryFile, InventoryStore, LoopMemo};
+
+/// Inventory update produced by one `open_loops` call: `(common-dir hash, file)`.
+type InvUpdate = (String, InventoryFile);
+
+/// Options controlling a scan (light phase always; heavy phase optional + memoised).
+#[derive(Debug, Clone, Default)]
+pub struct ScanOptions {
+    /// Whether to compute ahead/behind counts (heavy phase via `rev-list`).
+    pub need_ahead_behind: bool,
+    /// When true, skip any cached inventory memo and recompute `rev-list`.
+    pub fresh: bool,
+    /// Directory for the inventory JSON files. `None` disables memoisation.
+    pub inventory_dir: Option<PathBuf>,
+    /// Seconds before a cached entry expires; 0 = SHA-only validation.
+    pub inventory_ttl_secs: u64,
+}
+
 /// Runs a git subcommand in `repo` and returns trimmed stdout.
 ///
 /// # Errors
@@ -29,28 +47,46 @@ pub(crate) fn git(repo: &Path, args: &[&str]) -> Result<String> {
     Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
 }
 
-/// Default branch: origin/HEAD if it exists; otherwise main; otherwise master.
+/// Default branch: origin/HEAD's target if it resolves locally; otherwise main;
+/// otherwise master.
 ///
 /// # Errors
 ///
 /// Returns `Err` if no default branch is found.
 pub fn default_branch(repo: &Path) -> Result<String> {
+    let (name, _) = default_branch_and_sha(repo)?;
+    Ok(name)
+}
+
+/// Default branch name and its SHA, resolved in a single rev-parse call.
+/// Used internally to avoid redundant git calls in the heavy phase.
+///
+/// origin/HEAD only wins when its target branch exists locally: a stale or
+/// `--single-branch` origin/HEAD can name a branch with no local ref, and we
+/// must fall through to main/master rather than hide the whole repo.
+///
+/// # Errors
+///
+/// Returns `Err` if no default branch is found.
+fn default_branch_and_sha(repo: &Path) -> Result<(String, String)> {
     if let Ok(sym) = git(
         repo,
         &["symbolic-ref", "--short", "refs/remotes/origin/HEAD"],
     ) {
         if let Some(branch) = sym.strip_prefix("origin/") {
-            return Ok(branch.to_string());
+            // Only honour origin/HEAD when its branch resolves locally; otherwise
+            // fall through so a stale pointer doesn't make the repo disappear.
+            if let Ok(sha) = git(repo, &["rev-parse", &format!("refs/heads/{branch}")]) {
+                return Ok((branch.to_string(), sha));
+            }
         }
     }
     for candidate in ["main", "master"] {
-        if git(
+        if let Ok(sha) = git(
             repo,
             &["rev-parse", "--verify", &format!("refs/heads/{candidate}")],
-        )
-        .is_ok()
-        {
-            return Ok(candidate.to_string());
+        ) {
+            return Ok((candidate.to_string(), sha));
         }
     }
     bail!(
@@ -125,6 +161,15 @@ pub fn git_common_dir(path: &Path) -> Result<PathBuf> {
     )?;
     Ok(PathBuf::from(raw))
 }
+
+// PERF-1: git_common_dir is called twice per repo — once in dedup_candidates
+// (computed but not stored), and again in open_loops. Reusing the value from
+// dedup would require changing RepoCandidate or open_loops's public signature.
+// Both are internal, but threading the common_dir through without altering the
+// public API would require wrapping it in a private helper that cli.rs doesn't call.
+// Current cost: negligible (one extra git call per repo per scan), acceptable
+// trade-off for keeping the public signature stable. Revisit if scan latency
+// becomes dominated by this call (measure: `time loops scan --fresh`).
 
 /// One entry from `git worktree list --porcelain`.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -257,16 +302,28 @@ pub fn repo_name_hint(path: &Path) -> String {
     base.strip_suffix(".git").map(str::to_owned).unwrap_or(base)
 }
 
-/// Returns all unmerged branches (except default) in a repo.
+/// Returns all unmerged branches (except default) in a repo, optionally reading
+/// and updating the inventory memo for ahead/behind.
 ///
-/// Light phase (default branch, merged set, for-each-ref) always runs. The heavy
-/// phase (`rev-list` for ahead/behind) runs only when `need_ahead_behind` is true.
+/// Light phase (default branch, merged set, `for-each-ref`) always runs. The
+/// heavy phase (`rev-list` for ahead/behind) runs only when
+/// `opts.need_ahead_behind` is true, and consults the inventory memo unless
+/// `opts.fresh` is set.
+///
+/// Returns the open loops and, when memoisation is active, the updated
+/// `(hash, InventoryFile)` pair for write-through by the caller.
 ///
 /// # Errors
 ///
 /// Returns `Err` if git fails or if the default branch is not found.
-pub fn open_loops(repo: &Path, root_label: &str, need_ahead_behind: bool) -> Result<Vec<OpenLoop>> {
-    let default = default_branch(repo)?;
+pub fn open_loops(
+    repo: &Path,
+    root_label: &str,
+    opts: &ScanOptions,
+) -> Result<(Vec<OpenLoop>, Option<InvUpdate>)> {
+    // Resolve default branch and its SHA once (PERF-2: avoid duplicate rev-parse).
+    let (default, default_sha) = default_branch_and_sha(repo)?;
+
     let common_dir = git_common_dir(repo)?;
     let repo_name = repo_name_from_common_dir(&common_dir);
     let worktrees = worktree_map(repo).unwrap_or_else(|e| {
@@ -291,7 +348,39 @@ pub fn open_loops(repo: &Path, root_label: &str, need_ahead_behind: bool) -> Res
             "--format=%(refname:short)%09%(objectname)%09%(committerdate:iso8601-strict)",
         ],
     )?;
+
+    // Determine whether to use the inventory memo for this scan.
+    let use_inventory = opts.need_ahead_behind && opts.inventory_dir.is_some();
+
+    // Robustness: if default_sha is empty, skip memoisation to avoid poisoning the cache.
+    let use_inventory = use_inventory && !default_sha.is_empty();
+
+    let hash = if use_inventory {
+        inventory::common_dir_hash(&common_dir)
+    } else {
+        String::new()
+    };
+
+    // Load the existing inventory file unless `--fresh` was requested.
+    // Destructure inventory_dir once to avoid .unwrap() landmine.
+    let existing: Option<InventoryFile> = if use_inventory && !opts.fresh {
+        if let Some(inv_dir) = &opts.inventory_dir {
+            let store = InventoryStore {
+                dir: inv_dir.clone(),
+            };
+            store.load(&hash)
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+
+    let now = Utc::now();
+    let repo_canonical = std::fs::canonicalize(repo).unwrap_or_else(|_| repo.to_path_buf());
+    let mut new_memos: Vec<LoopMemo> = Vec::new();
     let mut result = Vec::new();
+
     for line in raw.lines() {
         let mut parts = line.split('\t');
         let (Some(branch), Some(sha), Some(date)) = (parts.next(), parts.next(), parts.next())
@@ -302,23 +391,55 @@ pub fn open_loops(repo: &Path, root_label: &str, need_ahead_behind: bool) -> Res
         if branch == default || merged.contains(branch) {
             continue;
         }
-        let (ahead, behind) = if need_ahead_behind {
-            let counts = git(
-                repo,
-                &[
-                    "rev-list",
-                    "--left-right",
-                    "--count",
-                    &format!("{default}...{branch}"),
-                ],
-            )?;
-            let mut c = counts.split_whitespace();
-            let behind: u32 = c.next().unwrap_or("0").parse().unwrap_or(0);
-            let ahead: u32 = c.next().unwrap_or("0").parse().unwrap_or(0);
-            (Some(ahead), Some(behind))
+
+        let (ahead, behind) = if opts.need_ahead_behind {
+            let cached = if use_inventory {
+                existing.as_ref().and_then(|f| {
+                    inventory::lookup_ahead_behind(
+                        f,
+                        branch,
+                        sha,
+                        &default_sha,
+                        opts.inventory_ttl_secs,
+                        now,
+                    )
+                })
+            } else {
+                None
+            };
+
+            let (a, b) = if let Some(hit) = cached {
+                hit
+            } else {
+                let counts = git(
+                    repo,
+                    &[
+                        "rev-list",
+                        "--left-right",
+                        "--count",
+                        &format!("{default}...{branch}"),
+                    ],
+                )?;
+                let mut c = counts.split_whitespace();
+                let behind_val: u32 = c.next().unwrap_or("0").parse().unwrap_or(0);
+                let ahead_val: u32 = c.next().unwrap_or("0").parse().unwrap_or(0);
+                (ahead_val, behind_val)
+            };
+
+            if use_inventory {
+                new_memos.push(LoopMemo {
+                    branch: branch.to_string(),
+                    head_sha: sha.to_string(),
+                    ab_base_sha: default_sha.clone(),
+                    ahead: a,
+                    behind: b,
+                });
+            }
+            (Some(a), Some(b))
         } else {
             (None, None)
         };
+
         let last_commit = DateTime::parse_from_rfc3339(date)
             .with_context(|| format!("invalid date from git: {date}"))?
             .with_timezone(&Utc);
@@ -337,7 +458,21 @@ pub fn open_loops(repo: &Path, root_label: &str, need_ahead_behind: bool) -> Res
             behind,
         });
     }
-    Ok(result)
+
+    let inventory_update = if use_inventory {
+        Some((
+            hash,
+            InventoryFile {
+                repo_path: repo_canonical,
+                indexed_at: now,
+                loops: new_memos,
+            },
+        ))
+    } else {
+        None
+    };
+
+    Ok((result, inventory_update))
 }
 
 /// Scans all repos found under the roots in parallel.
@@ -345,25 +480,28 @@ pub fn open_loops(repo: &Path, root_label: &str, need_ahead_behind: bool) -> Res
 /// `repo_filter`, when set, retains only repos whose canonical name (from dedup)
 /// matches before `open_loops` runs. Individual repo failures become warnings and
 /// never abort the scan.
+///
+/// Returns `(loops, warnings, inventory_updates)` where `inventory_updates` is a
+/// vec of `(hash, file)` pairs ready for write-through by the caller.
 pub fn scan(
     roots: &[PathBuf],
     labels: &[(PathBuf, String)],
     scan_depth: usize,
-    need_ahead_behind: bool,
+    opts: &ScanOptions,
     repo_filter: Option<&str>,
-) -> (Vec<OpenLoop>, Vec<String>) {
+) -> (Vec<OpenLoop>, Vec<String>, Vec<InvUpdate>) {
     let (mut repos, mut warnings) = find_repos(roots, scan_depth);
     if let Some(filter) = repo_filter {
         let needle = filter.to_lowercase();
         repos.retain(|r| r.repo_name.to_lowercase().contains(&needle));
     }
-    let results: Vec<Result<Vec<OpenLoop>>> = std::thread::scope(|s| {
+    let results: Vec<Result<(Vec<OpenLoop>, Option<InvUpdate>)>> = std::thread::scope(|s| {
         let handles: Vec<_> = repos
             .iter()
             .map(|repo| {
                 let label = crate::config::label_for_repo(labels, &repo.path);
                 let path = repo.path.clone();
-                s.spawn(move || open_loops(&path, &label, need_ahead_behind))
+                s.spawn(move || open_loops(&path, &label, opts))
             })
             .collect();
         handles
@@ -375,13 +513,19 @@ pub fn scan(
             .collect()
     });
     let mut all = Vec::new();
+    let mut inventory_updates = Vec::new();
     for (repo, res) in repos.iter().zip(results) {
         match res {
-            Ok(mut loops) => all.append(&mut loops),
+            Ok((mut loops, inv)) => {
+                all.append(&mut loops);
+                if let Some(update) = inv {
+                    inventory_updates.push(update);
+                }
+            }
             Err(e) => warnings.push(format!("{}: {e:#}", repo.path.display())),
         }
     }
-    (all, warnings)
+    (all, warnings, inventory_updates)
 }
 
 /// Branch-exclusive commits relative to the default (for the distillation prompt).
@@ -446,6 +590,35 @@ mod tests {
     use super::*;
     use crate::testutil;
 
+    /// Helper: call `open_loops` without inventory, returning only the loops vec.
+    fn open_loops_simple(
+        repo: &std::path::Path,
+        root_label: &str,
+        need_ahead_behind: bool,
+    ) -> Vec<OpenLoop> {
+        let opts = ScanOptions {
+            need_ahead_behind,
+            ..ScanOptions::default()
+        };
+        open_loops(repo, root_label, &opts).unwrap().0
+    }
+
+    /// Helper: call `scan` without inventory, returning only `(loops, warnings)`.
+    fn scan_simple(
+        roots: &[PathBuf],
+        labels: &[(PathBuf, String)],
+        depth: usize,
+        need_ahead_behind: bool,
+        filter: Option<&str>,
+    ) -> (Vec<OpenLoop>, Vec<String>) {
+        let opts = ScanOptions {
+            need_ahead_behind,
+            ..ScanOptions::default()
+        };
+        let (loops, warnings, _inv) = scan(roots, labels, depth, &opts, filter);
+        (loops, warnings)
+    }
+
     fn assert_same_path(actual: &std::path::Path, expected: &std::path::Path) {
         let a = std::fs::canonicalize(actual).unwrap_or_else(|_| actual.to_path_buf());
         let b = std::fs::canonicalize(expected).unwrap_or_else(|_| expected.to_path_buf());
@@ -457,6 +630,41 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let repo = tmp.path().join("app");
         testutil::init_repo(&repo);
+        assert_eq!(default_branch(&repo).unwrap(), "main");
+    }
+
+    #[test]
+    fn default_branch_honours_origin_head_when_target_is_local() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path().join("app");
+        testutil::init_repo(&repo); // main + commit
+        testutil::git(&repo, &["branch", "develop"]); // local develop exists
+        testutil::git(
+            &repo,
+            &[
+                "symbolic-ref",
+                "refs/remotes/origin/HEAD",
+                "refs/remotes/origin/develop",
+            ],
+        );
+        // origin/HEAD wins over main because its target resolves locally.
+        assert_eq!(default_branch(&repo).unwrap(), "develop");
+    }
+
+    #[test]
+    fn default_branch_falls_back_when_origin_head_target_missing() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path().join("app");
+        testutil::init_repo(&repo); // main + commit, no local "ghost"
+        testutil::git(
+            &repo,
+            &[
+                "symbolic-ref",
+                "refs/remotes/origin/HEAD",
+                "refs/remotes/origin/ghost",
+            ],
+        );
+        // Stale origin/HEAD target → fall through to main, not an error.
         assert_eq!(default_branch(&repo).unwrap(), "main");
     }
 
@@ -547,7 +755,7 @@ mod tests {
         testutil::add_named_worktree(&container, "dev", "dev");
         testutil::add_branch_on_bare(&container.join(".bare"), "feat/x", "x.txt");
 
-        let loops = open_loops(&container, "root", true).unwrap();
+        let loops = open_loops_simple(&container, "root", true);
         assert_eq!(loops.len(), 1);
         assert_eq!(loops[0].repo_name, "my-app");
         assert_eq!(loops[0].branch, "feat/x");
@@ -562,7 +770,7 @@ mod tests {
         testutil::seed_bare_main(&bare);
         testutil::add_branch_on_bare(&bare, "feat/y", "y.txt");
 
-        let loops = open_loops(&bare, "r", true).unwrap();
+        let loops = open_loops_simple(&bare, "r", true);
         assert_eq!(loops[0].repo_name, "foo");
     }
 
@@ -574,7 +782,7 @@ mod tests {
         testutil::add_branch_with_commit(&repo, "feat/x", "x.txt");
         testutil::git(&repo, &["branch", "merged"]); // points to main => merged
 
-        let loops = open_loops(&repo, "root", true).unwrap();
+        let loops = open_loops_simple(&repo, "root", true);
         assert_eq!(loops.len(), 1);
         let l = &loops[0];
         assert_eq!(l.branch, "feat/x");
@@ -593,7 +801,7 @@ mod tests {
         testutil::init_bare_worktree_container(&container);
         testutil::add_worktree_with_commit(&container, "feat-x", "feat/x", "x.txt");
 
-        let loops = open_loops(&container, "root", true).unwrap();
+        let loops = open_loops_simple(&container, "root", true);
         let lp = loops
             .iter()
             .find(|l| l.branch == "feat/x")
@@ -609,7 +817,7 @@ mod tests {
         // feat/y exists in the store but is NOT checked out in any worktree
         testutil::add_branch_on_bare(&container.join(".bare"), "feat/y", "y.txt");
 
-        let loops = open_loops(&container, "root", true).unwrap();
+        let loops = open_loops_simple(&container, "root", true);
         let lp = loops
             .iter()
             .find(|l| l.branch == "feat/y")
@@ -623,7 +831,7 @@ mod tests {
         let repo = tmp.path().join("app");
         testutil::init_repo(&repo);
         testutil::add_branch_with_commit(&repo, "feat/x", "x.txt"); // checks out feat/x then back to main
-        let loops = open_loops(&repo, "root", true).unwrap();
+        let loops = open_loops_simple(&repo, "root", true);
         assert_eq!(loops[0].branch, "feat/x");
         assert_eq!(loops[0].repo_path, repo); // not checked out in a worktree → fallback
     }
@@ -635,7 +843,7 @@ mod tests {
         testutil::init_repo(&repo);
         testutil::add_branch_with_commit(&repo, "feat/x", "x.txt");
 
-        let loops = open_loops(&repo, "root", false).unwrap();
+        let loops = open_loops_simple(&repo, "root", false);
         assert_eq!(loops.len(), 1);
         assert_eq!(loops[0].ahead, None);
         assert_eq!(loops[0].behind, None);
@@ -648,8 +856,83 @@ mod tests {
         testutil::init_repo(&repo);
         testutil::add_branch_with_commit(&repo, "feat/x", "x.txt");
 
-        let loops = open_loops(&repo, "root", true).unwrap();
+        let loops = open_loops_simple(&repo, "root", true);
         assert_eq!(loops.len(), 1);
+        assert_eq!(loops[0].ahead, Some(1));
+        assert_eq!(loops[0].behind, Some(0));
+    }
+
+    #[test]
+    fn open_loops_reuses_inventory_memo_on_repeated_scan() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path().join("app");
+        testutil::init_repo(&repo);
+        testutil::add_branch_with_commit(&repo, "feat/x", "x.txt");
+        let inv_dir = tmp.path().join("inv");
+
+        let opts = ScanOptions {
+            need_ahead_behind: true,
+            fresh: false,
+            inventory_dir: Some(inv_dir.clone()),
+            inventory_ttl_secs: 0,
+        };
+
+        // First call: no cache → runs rev-list and writes inventory.
+        let (loops1, inv1) = open_loops(&repo, "root", &opts).unwrap();
+        assert_eq!(loops1.len(), 1);
+        assert_eq!(loops1[0].ahead, Some(1));
+        let (hash, file) = inv1.unwrap();
+        let store = InventoryStore {
+            dir: inv_dir.clone(),
+        };
+        store.save(&hash, &file).unwrap();
+
+        // Second call: memo present → cache hit; ahead/behind same.
+        let (loops2, inv2) = open_loops(&repo, "root", &opts).unwrap();
+        assert_eq!(loops2.len(), 1);
+        assert_eq!(loops2[0].ahead, Some(1));
+        assert_eq!(loops2[0].behind, Some(0));
+        // inventory update is still returned (for write-through)
+        assert!(inv2.is_some());
+    }
+
+    #[test]
+    fn open_loops_fresh_ignores_inventory_memo() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path().join("app");
+        testutil::init_repo(&repo);
+        testutil::add_branch_with_commit(&repo, "feat/x", "x.txt");
+        let inv_dir = tmp.path().join("inv");
+
+        // Pre-seed inventory with wrong ahead/behind values to detect if it's
+        // being used.
+        let common = git_common_dir(&repo).unwrap();
+        let hash = crate::inventory::common_dir_hash(&common);
+        let store = InventoryStore {
+            dir: inv_dir.clone(),
+        };
+        let fake_sha = "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef";
+        let stub_file = InventoryFile {
+            repo_path: repo.clone(),
+            indexed_at: chrono::Utc::now(),
+            loops: vec![LoopMemo {
+                branch: "feat/x".to_string(),
+                head_sha: fake_sha.to_string(),
+                ab_base_sha: fake_sha.to_string(),
+                ahead: 99,
+                behind: 99,
+            }],
+        };
+        store.save(&hash, &stub_file).unwrap();
+
+        let opts = ScanOptions {
+            need_ahead_behind: true,
+            fresh: true, // <-- bypass cache
+            inventory_dir: Some(inv_dir.clone()),
+            inventory_ttl_secs: 0,
+        };
+        let (loops, _) = open_loops(&repo, "root", &opts).unwrap();
+        // real values, not the stubbed 99/99
         assert_eq!(loops[0].ahead, Some(1));
         assert_eq!(loops[0].behind, Some(0));
     }
@@ -665,7 +948,7 @@ mod tests {
         testutil::add_branch_with_commit(&web, "feat/web", "w.txt");
 
         let labels = vec![(tmp.path().to_path_buf(), "r".to_string())];
-        let (loops, _) = scan(&[tmp.path().to_path_buf()], &labels, 4, false, Some("api"));
+        let (loops, _) = scan_simple(&[tmp.path().to_path_buf()], &labels, 4, false, Some("api"));
         assert_eq!(loops.len(), 1);
         assert_eq!(loops[0].repo_name, "api-service");
         assert_eq!(loops[0].branch, "feat/api");
@@ -685,7 +968,7 @@ mod tests {
 
         let labels = vec![(tmp.path().to_path_buf(), "r".to_string())];
         // lowercase filter must match a mixed-case repo dir (both sides lowered)
-        let (loops, _) = scan(&[tmp.path().to_path_buf()], &labels, 4, false, Some("api"));
+        let (loops, _) = scan_simple(&[tmp.path().to_path_buf()], &labels, 4, false, Some("api"));
         assert_eq!(loops.len(), 1);
         assert_eq!(loops[0].repo_name, "API-Service");
     }
@@ -698,7 +981,7 @@ mod tests {
         testutil::add_branch_with_commit(&api, "feat/api", "a.txt");
 
         let labels = vec![(tmp.path().to_path_buf(), "r".to_string())];
-        let (loops, warnings) = scan(
+        let (loops, warnings) = scan_simple(
             &[tmp.path().to_path_buf()],
             &labels,
             4,
@@ -724,7 +1007,7 @@ mod tests {
         testutil::git(&empty, &["init", "-b", "main"]);
 
         let labels = vec![(tmp.path().to_path_buf(), "r".to_string())];
-        let (loops, warnings) = scan(&[tmp.path().to_path_buf()], &labels, 4, true, None);
+        let (loops, warnings) = scan_simple(&[tmp.path().to_path_buf()], &labels, 4, true, None);
         assert_eq!(loops.len(), 1);
         assert_eq!(loops[0].key(), "r/good/feat/ok");
         assert_eq!(warnings.len(), 1);

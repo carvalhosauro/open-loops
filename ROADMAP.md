@@ -89,17 +89,17 @@ Depende de: **Spec Fase A** (scan que acha repos + `repo_name` final). `@` conte
 - [x] `need_ahead_behind` = renderiza colunas AHEAD/BEHIND **ou** query tem attr `ahead`/`behind`
 - [x] `ahead`/`behind` ficam `None` quando a fase pesada não roda; `render_table` imprime `-`
 
-### ⬜ ADR fase 3 — inventory cache + refresh  ·  [ADR 0003](docs/decisions/0003-query-engine.md)
+### ✅ ADR fase 3 — inventory cache + refresh  ·  [ADR 0003](docs/decisions/0003-query-engine.md)
 
 Depende de: **Spec Fase A** (common-dir = identidade do hash), **ADR fase 2**
 
-- [ ] `inventory.rs`: arquivo por repo em `~/.open-loops/inventory/<hash-common-dir>.json`
-- [ ] memo de ahead/behind validado por `(head_sha, ab_base_sha)`
-- [ ] write-through em todo scan (inclusive `loops api`)
-- [ ] escrita atômica (tmp + rename)
-- [ ] `--fresh` ignora o memo; `loops refresh [@ctx]` full reindex
-- [ ] `inventory_ttl_secs` no config (default 0 = só validação por SHA)
-- [ ] limpeza preguiçosa de órfãos no `refresh` ([ADR 0004](docs/decisions/0004-fase2-evidence-snapshot.md))
+- [x] `inventory.rs`: arquivo por repo em `~/.open-loops/inventory/<hash-common-dir>.json`
+- [x] memo de ahead/behind validado por `(head_sha, ab_base_sha)`
+- [x] write-through em todo scan (inclusive `loops api`)
+- [x] escrita atômica (tmp + rename)
+- [x] `--fresh` ignora o memo; `loops refresh [query]` full reindex
+- [x] `inventory_ttl_secs` no config (default 0 = só validação por SHA)
+- [x] limpeza preguiçosa de órfãos no `refresh` ([ADR 0004](docs/decisions/0004-fase2-evidence-snapshot.md))
 
 ### ⬜ ADR fase 4 — contexts `@`  ·  [ADR 0003](docs/decisions/0003-query-engine.md)
 

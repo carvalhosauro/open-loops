@@ -528,6 +528,120 @@ fn resume_includes_session_excerpt_for_branch_in_worktree() {
 }
 
 #[test]
+fn inventory_write_through_on_list() {
+    let tmp = tempfile::tempdir().unwrap();
+    let home = tmp.path().join("home");
+    let repo = tmp.path().join("projects/my-app");
+    std::fs::create_dir_all(&repo).unwrap();
+    git(&repo, &["init", "-b", "main"]);
+    std::fs::write(repo.join("a.txt"), "a").unwrap();
+    git(&repo, &["add", "."]);
+    git(&repo, &["commit", "-m", "init"]);
+    git(&repo, &["checkout", "-b", "feat/cache-me"]);
+    std::fs::write(repo.join("b.txt"), "b").unwrap();
+    git(&repo, &["add", "."]);
+    git(&repo, &["commit", "-m", "feat: cache me"]);
+
+    loops(&home)
+        .arg("init")
+        .arg(tmp.path().join("projects"))
+        .assert()
+        .success();
+
+    // First `loops`: inventory file must be created under home/inventory/.
+    loops(&home)
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("my-app/feat/cache-me"));
+
+    let inv_dir = home.join("inventory");
+    assert!(
+        inv_dir.exists(),
+        "inventory dir should be created after first scan"
+    );
+    let entries: Vec<_> = std::fs::read_dir(&inv_dir)
+        .unwrap()
+        .flatten()
+        .filter(|e| e.path().extension().is_some_and(|x| x == "json"))
+        .collect();
+    assert_eq!(entries.len(), 1, "exactly one inventory JSON expected");
+
+    // Verify the JSON contains the expected fields.
+    let json_raw = std::fs::read_to_string(entries[0].path()).unwrap();
+    let json: serde_json::Value = serde_json::from_str(&json_raw).unwrap();
+    assert!(json["repo_path"].is_string(), "repo_path must be present");
+    assert!(json["indexed_at"].is_string(), "indexed_at must be present");
+    let loops_arr = json["loops"].as_array().unwrap();
+    assert_eq!(loops_arr.len(), 1);
+    let memo = &loops_arr[0];
+    assert_eq!(memo["branch"].as_str().unwrap(), "feat/cache-me");
+    assert!(memo["head_sha"].is_string());
+    assert!(memo["ab_base_sha"].is_string());
+    assert_eq!(memo["ahead"].as_u64().unwrap(), 1);
+    assert_eq!(memo["behind"].as_u64().unwrap(), 0);
+
+    // `loops --fresh` must still work (bypasses memo but rewrites the file).
+    loops(&home)
+        .arg("--fresh")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("feat/cache-me"));
+
+    // `loops refresh` must print "refreshed N repos" on stderr.
+    loops(&home)
+        .arg("refresh")
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("refreshed 1 repo"));
+}
+
+#[test]
+fn scoped_refresh_does_not_prune_other_inventory() {
+    let tmp = tempfile::tempdir().unwrap();
+    let home = tmp.path().join("home");
+    let api = tmp.path().join("projects/api-service");
+    let web = tmp.path().join("projects/web-app");
+    for repo in [&api, &web] {
+        std::fs::create_dir_all(repo).unwrap();
+        git(repo, &["init", "-b", "main"]);
+        std::fs::write(repo.join("a.txt"), "a").unwrap();
+        git(repo, &["add", "."]);
+        git(repo, &["commit", "-m", "init"]);
+        git(repo, &["checkout", "-b", "feat/x"]);
+        std::fs::write(repo.join("b.txt"), "b").unwrap();
+        git(repo, &["add", "."]);
+        git(repo, &["commit", "-m", "feat"]);
+    }
+
+    loops(&home)
+        .arg("init")
+        .arg(tmp.path().join("projects"))
+        .assert()
+        .success();
+
+    loops(&home).assert().success();
+
+    let inv_dir = home.join("inventory");
+    assert_eq!(
+        count_inventory_json(&inv_dir),
+        2,
+        "expected one inventory file per repo"
+    );
+
+    loops(&home)
+        .args(["refresh", "repo:api"])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("refreshed 1 repo"));
+
+    assert_eq!(
+        count_inventory_json(&inv_dir),
+        2,
+        "scoped refresh must not delete inventory for repos outside the query"
+    );
+}
+
+#[test]
 fn resume_dry_run_skips_ahead_behind_without_attr_filter() {
     let tmp = tempfile::tempdir().unwrap();
     let home = tmp.path().join("home");
@@ -553,4 +667,362 @@ fn resume_dry_run_skips_ahead_behind_without_attr_filter() {
         .assert()
         .success()
         .stdout(predicate::str::contains("ahead: -, behind: -"));
+}
+
+/// Creates `<root>/<name>` as a git repo on `main` plus one unmerged `feat/x`
+/// branch carrying a single extra commit (ahead 1, behind 0). File contents are
+/// keyed by `name` so each repo has distinct commit SHAs (identical trees +
+/// same-second commits would otherwise collide, which never happens for real
+/// repos but would for fixtures built in a tight loop).
+fn repo_with_feature(root: &Path, name: &str) {
+    let repo = root.join(name);
+    std::fs::create_dir_all(&repo).unwrap();
+    git(&repo, &["init", "-b", "main"]);
+    std::fs::write(repo.join("a.txt"), format!("base-{name}")).unwrap();
+    git(&repo, &["add", "."]);
+    git(&repo, &["commit", "-m", "init"]);
+    git(&repo, &["checkout", "-b", "feat/x"]);
+    std::fs::write(repo.join("b.txt"), format!("feat-{name}")).unwrap();
+    git(&repo, &["add", "."]);
+    git(&repo, &["commit", "-m", "feat"]);
+    // Leave the repo on its default branch so callers that add worktrees or set
+    // origin/HEAD start from a clean main checkout.
+    git(&repo, &["checkout", "main"]);
+}
+
+/// Counts inventory `*.json` files in `dir` (0 if the dir is absent).
+fn count_inventory_json(dir: &Path) -> usize {
+    std::fs::read_dir(dir)
+        .map(|rd| {
+            rd.flatten()
+                .filter(|e| e.path().extension().is_some_and(|x| x == "json"))
+                .count()
+        })
+        .unwrap_or(0)
+}
+
+/// `loops refresh <bare-word>` must scope the reindex to repos the same query
+/// would list — not reindex every repo. Regression for the bug where bare terms
+/// (which only filter in memory) were ignored by `run_refresh`, so the push-down
+/// filter was `None` and all repos were rewritten.
+#[test]
+fn refresh_bare_term_scopes_to_matching_repos() {
+    let tmp = tempfile::tempdir().unwrap();
+    let home = tmp.path().join("home");
+    let projects = tmp.path().join("projects");
+    for name in ["alpha", "beta", "gamma"] {
+        repo_with_feature(&projects, name);
+    }
+
+    loops(&home).arg("init").arg(&projects).assert().success();
+    loops(&home).assert().success();
+
+    // Bare term "beta" matches only the beta repo → reindex exactly one.
+    loops(&home)
+        .args(["refresh", "beta"])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("refreshed 1 repo"));
+
+    // The explicit repo: filter must agree.
+    loops(&home)
+        .args(["refresh", "repo:beta"])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("refreshed 1 repo"));
+
+    // Empty query still reindexes everything.
+    loops(&home)
+        .arg("refresh")
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("refreshed 3 repos"));
+}
+
+/// A disk-gone repo's inventory is reclaimed on ANY refresh, regardless of the
+/// query scope — `prune_orphans` is a deliberate global GC (commit 948446c).
+/// This exercises the disk-gone-out-of-scope path that
+/// `scoped_refresh_does_not_prune_other_inventory` (on-disk only) cannot.
+#[test]
+fn refresh_prunes_disk_gone_repo_even_when_out_of_scope() {
+    let tmp = tempfile::tempdir().unwrap();
+    let home = tmp.path().join("home");
+    let projects = tmp.path().join("projects");
+    for name in ["api-1", "api-2", "web-1"] {
+        repo_with_feature(&projects, name);
+    }
+
+    loops(&home).arg("init").arg(&projects).assert().success();
+    loops(&home).assert().success();
+
+    let inv_dir = home.join("inventory");
+    assert_eq!(
+        count_inventory_json(&inv_dir),
+        3,
+        "one inventory file per repo"
+    );
+
+    // web-1 disappears from disk; it is now an orphan.
+    std::fs::remove_dir_all(projects.join("web-1")).unwrap();
+
+    // Scoped refresh that never scans web-1 still reclaims its orphan memo.
+    loops(&home)
+        .args(["refresh", "repo:api"])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("refreshed 2 repos"))
+        .stderr(predicate::str::contains("removed orphan inventory"));
+
+    assert_eq!(
+        count_inventory_json(&inv_dir),
+        2,
+        "disk-gone web-1 inventory must be pruned"
+    );
+}
+
+/// Proves the memo is actually read on a warm scan and that `--fresh` bypasses
+/// it: poison the cached `ahead` to 99, then use the query engine as an oracle —
+/// `loops ahead:99` matches only if the (wrong) memo was served, and
+/// `loops --fresh ahead:99` recomputes the real value (1) so nothing matches.
+#[test]
+fn cache_hit_serves_memo_and_fresh_recomputes() {
+    let tmp = tempfile::tempdir().unwrap();
+    let home = tmp.path().join("home");
+    let projects = tmp.path().join("projects");
+    repo_with_feature(&projects, "app");
+
+    loops(&home).arg("init").arg(&projects).assert().success();
+    loops(&home).assert().success();
+
+    // Poison the cached ahead count, preserving the SHA keys so the memo still
+    // validates and gets served.
+    let inv_dir = home.join("inventory");
+    let inv_file = std::fs::read_dir(&inv_dir)
+        .unwrap()
+        .flatten()
+        .find(|e| e.path().extension().is_some_and(|x| x == "json"))
+        .unwrap()
+        .path();
+    let mut json: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&inv_file).unwrap()).unwrap();
+    json["loops"][0]["ahead"] = serde_json::json!(99);
+    std::fs::write(&inv_file, serde_json::to_string(&json).unwrap()).unwrap();
+
+    // Warm scan serves the poisoned memo → ahead:99 matches.
+    loops(&home)
+        .arg("ahead:99")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("feat/x"));
+
+    // --fresh ignores the memo and recomputes ahead=1 → ahead:99 matches nothing.
+    loops(&home)
+        .args(["--fresh", "ahead:99"])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("No loops match"));
+}
+
+/// `loops refresh branch:<x>` is an in-memory filter, so run_refresh must scope
+/// the reindex by it too (not just `repo:`/`root:`).
+#[test]
+fn refresh_branch_filter_scopes_to_matching_branch() {
+    let tmp = tempfile::tempdir().unwrap();
+    let home = tmp.path().join("home");
+    let projects = tmp.path().join("projects");
+    // Two repos with DISTINCT branch names so branch: selects exactly one.
+    for (name, branch) in [("api", "feat/login"), ("web", "feat/cart")] {
+        let repo = projects.join(name);
+        std::fs::create_dir_all(&repo).unwrap();
+        git(&repo, &["init", "-b", "main"]);
+        std::fs::write(repo.join("a.txt"), format!("base-{name}")).unwrap();
+        git(&repo, &["add", "."]);
+        git(&repo, &["commit", "-m", "init"]);
+        git(&repo, &["checkout", "-b", branch]);
+        std::fs::write(repo.join("b.txt"), format!("feat-{name}")).unwrap();
+        git(&repo, &["add", "."]);
+        git(&repo, &["commit", "-m", "feat"]);
+    }
+
+    loops(&home).arg("init").arg(&projects).assert().success();
+    loops(&home).assert().success();
+
+    loops(&home)
+        .args(["refresh", "branch:login"])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("refreshed 1 repo"));
+}
+
+/// A query that matches nothing reindexes nothing (and does not error/panic).
+#[test]
+fn refresh_no_match_reindexes_nothing() {
+    let tmp = tempfile::tempdir().unwrap();
+    let home = tmp.path().join("home");
+    let projects = tmp.path().join("projects");
+    for name in ["alpha", "beta"] {
+        repo_with_feature(&projects, name);
+    }
+
+    loops(&home).arg("init").arg(&projects).assert().success();
+    loops(&home).assert().success();
+
+    loops(&home)
+        .args(["refresh", "zzz-no-such-repo-or-branch"])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("refreshed 0 repos"));
+}
+
+/// Two worktrees of one repo share a single common-dir, so they must map to
+/// exactly ONE inventory file (the worktree-safety invariant run_refresh's
+/// HEAD-sha scoping relies on). Both unmerged branches must still be listed.
+#[test]
+fn worktrees_of_one_repo_share_a_single_inventory_file() {
+    let tmp = tempfile::tempdir().unwrap();
+    let home = tmp.path().join("home");
+    let root = tmp.path().join("projects");
+    // Primary checkout: main + one unmerged feat/x, left on main.
+    repo_with_feature(&root, "app");
+    let repo = root.join("app");
+    // Second unmerged branch in a linked worktree (shares the common-dir).
+    let wt = tmp.path().join("wt-y");
+    git(
+        &repo,
+        &["worktree", "add", wt.to_str().unwrap(), "-b", "feat/y"],
+    );
+    std::fs::write(wt.join("c.txt"), "c").unwrap();
+    git(&wt, &["add", "."]);
+    git(&wt, &["commit", "-m", "feat y"]);
+
+    loops(&home).arg("init").arg(&root).assert().success();
+    loops(&home)
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("feat/x"))
+        .stdout(predicate::str::contains("feat/y"));
+
+    assert_eq!(
+        count_inventory_json(&home.join("inventory")),
+        1,
+        "two worktrees of one repo must share a single inventory file"
+    );
+}
+
+/// BUG-2 regression: concurrent `loops --fresh` processes writing the same
+/// inventory must not race on the tmp file. Asserts every process exits 0, no
+/// `.tmp` is left behind, and every inventory JSON parses.
+#[test]
+fn inventory_writes_survive_concurrent_processes() {
+    let tmp = tempfile::tempdir().unwrap();
+    let home = tmp.path().join("home");
+    let projects = tmp.path().join("projects");
+    for name in ["api", "web", "cli"] {
+        repo_with_feature(&projects, name);
+    }
+    loops(&home).arg("init").arg(&projects).assert().success();
+
+    let bin = env!("CARGO_BIN_EXE_loops");
+    let handles: Vec<_> = (0..8)
+        .map(|_| {
+            let home = home.clone();
+            let bin = bin.to_string();
+            std::thread::spawn(move || {
+                std::process::Command::new(bin)
+                    .env("OPEN_LOOPS_HOME", &home)
+                    .arg("--fresh")
+                    .output()
+                    .unwrap()
+            })
+        })
+        .collect();
+    for h in handles {
+        let out = h.join().unwrap();
+        assert!(out.status.success(), "concurrent scan exited non-zero");
+    }
+
+    let inv_dir = home.join("inventory");
+    let mut tmp_left = 0;
+    for entry in std::fs::read_dir(&inv_dir).unwrap().flatten() {
+        let path = entry.path();
+        match path.extension().and_then(|e| e.to_str()) {
+            Some("tmp") => tmp_left += 1,
+            Some("json") => {
+                let raw = std::fs::read_to_string(&path).unwrap();
+                serde_json::from_str::<serde_json::Value>(&raw)
+                    .unwrap_or_else(|e| panic!("corrupt inventory {}: {e}", path.display()));
+            }
+            _ => {}
+        }
+    }
+    assert_eq!(tmp_left, 0, "no .tmp file should survive concurrent writes");
+    assert_eq!(
+        count_inventory_json(&inv_dir),
+        3,
+        "all three repos' inventory must be present and valid"
+    );
+}
+
+/// A stale / single-branch `origin/HEAD` that points at a branch with no local
+/// ref must NOT hide the repo: default-branch detection falls back to main.
+#[test]
+fn stale_origin_head_falls_back_to_main() {
+    let tmp = tempfile::tempdir().unwrap();
+    let home = tmp.path().join("home");
+    let root = tmp.path().join("projects");
+    repo_with_feature(&root, "app");
+    let repo = root.join("app");
+    // origin/HEAD points at a branch with no local ref (stale pointer).
+    git(
+        &repo,
+        &[
+            "symbolic-ref",
+            "refs/remotes/origin/HEAD",
+            "refs/remotes/origin/ghost",
+        ],
+    );
+
+    loops(&home).arg("init").arg(&root).assert().success();
+
+    // The repo must still appear (fell back to main), not vanish.
+    loops(&home)
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("app/feat/x"));
+}
+
+/// A corrupt inventory file for a repo that IS in the refresh scope is rewritten
+/// valid by write-through BEFORE prune runs, so it survives (not reclaimed). The
+/// prune-as-unreadable path only fires for files outside the scanned set.
+#[test]
+fn refresh_rewrites_corrupt_inventory_for_in_scope_repo() {
+    let tmp = tempfile::tempdir().unwrap();
+    let home = tmp.path().join("home");
+    let projects = tmp.path().join("projects");
+    repo_with_feature(&projects, "app");
+
+    loops(&home).arg("init").arg(&projects).assert().success();
+    loops(&home).assert().success();
+
+    // Corrupt the cached inventory for the (live, in-scope) repo.
+    let inv_dir = home.join("inventory");
+    let inv_file = std::fs::read_dir(&inv_dir)
+        .unwrap()
+        .flatten()
+        .find(|e| e.path().extension().is_some_and(|x| x == "json"))
+        .unwrap()
+        .path();
+    std::fs::write(&inv_file, b"{ corrupt").unwrap();
+
+    // refresh scans the repo → write-through rewrites the file valid before prune.
+    loops(&home).arg("refresh").assert().success();
+
+    assert_eq!(
+        count_inventory_json(&inv_dir),
+        1,
+        "in-scope file must survive"
+    );
+    let raw = std::fs::read_to_string(&inv_file).unwrap();
+    serde_json::from_str::<serde_json::Value>(&raw)
+        .expect("inventory must be valid JSON again after refresh");
 }

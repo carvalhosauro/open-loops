@@ -29,6 +29,10 @@ pub struct Config {
     /// Maximum directory depth (from each root) to search for git repositories.
     #[serde(default = "default_scan_depth")]
     pub scan_depth: usize,
+    /// Seconds before an inventory entry is considered expired regardless of SHA
+    /// match. 0 (default) means SHA-only validation with no time-based expiry.
+    #[serde(default)]
+    pub inventory_ttl_secs: u64,
 }
 
 fn default_llm_command() -> String {
@@ -63,6 +67,7 @@ impl Default for Config {
             max_sessions: default_max_sessions(),
             max_session_kb: default_max_session_kb(),
             scan_depth: default_scan_depth(),
+            inventory_ttl_secs: 0,
         }
     }
 }
@@ -330,6 +335,24 @@ mod tests {
         };
         store.save(&cfg).unwrap();
         assert_eq!(store.load().unwrap().scan_depth, 6);
+    }
+
+    #[test]
+    fn config_inventory_ttl_secs_defaults_to_zero() {
+        let cfg = Config::default();
+        assert_eq!(cfg.inventory_ttl_secs, 0);
+    }
+
+    #[test]
+    fn config_inventory_ttl_secs_roundtrips_from_toml() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = Store::new(tmp.path().join("state"));
+        let cfg = Config {
+            inventory_ttl_secs: 3600,
+            ..Config::default()
+        };
+        store.save(&cfg).unwrap();
+        assert_eq!(store.load().unwrap().inventory_ttl_secs, 3600);
     }
 
     #[test]
