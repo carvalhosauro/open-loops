@@ -968,3 +968,40 @@ fn inventory_writes_survive_concurrent_processes() {
         "all three repos' inventory must be present and valid"
     );
 }
+
+/// A stale / single-branch `origin/HEAD` that points at a branch with no local
+/// ref must NOT hide the repo: default-branch detection falls back to main.
+#[test]
+fn stale_origin_head_falls_back_to_main() {
+    let tmp = tempfile::tempdir().unwrap();
+    let home = tmp.path().join("home");
+    let root = tmp.path().join("projects");
+    let repo = root.join("app");
+    std::fs::create_dir_all(&repo).unwrap();
+    git(&repo, &["init", "-b", "main"]);
+    std::fs::write(repo.join("a.txt"), "a").unwrap();
+    git(&repo, &["add", "."]);
+    git(&repo, &["commit", "-m", "init"]);
+    git(&repo, &["checkout", "-b", "feat/x"]);
+    std::fs::write(repo.join("b.txt"), "b").unwrap();
+    git(&repo, &["add", "."]);
+    git(&repo, &["commit", "-m", "feat"]);
+    git(&repo, &["checkout", "main"]);
+    // origin/HEAD points at a branch with no local ref (stale pointer).
+    git(
+        &repo,
+        &[
+            "symbolic-ref",
+            "refs/remotes/origin/HEAD",
+            "refs/remotes/origin/ghost",
+        ],
+    );
+
+    loops(&home).arg("init").arg(&root).assert().success();
+
+    // The repo must still appear (fell back to main), not vanish.
+    loops(&home)
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("app/feat/x"));
+}

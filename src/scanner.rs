@@ -47,7 +47,8 @@ pub(crate) fn git(repo: &Path, args: &[&str]) -> Result<String> {
     Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
 }
 
-/// Default branch: origin/HEAD if it exists; otherwise main; otherwise master.
+/// Default branch: origin/HEAD's target if it resolves locally; otherwise main;
+/// otherwise master.
 ///
 /// # Errors
 ///
@@ -60,6 +61,10 @@ pub fn default_branch(repo: &Path) -> Result<String> {
 /// Default branch name and its SHA, resolved in a single rev-parse call.
 /// Used internally to avoid redundant git calls in the heavy phase.
 ///
+/// origin/HEAD only wins when its target branch exists locally: a stale or
+/// `--single-branch` origin/HEAD can name a branch with no local ref, and we
+/// must fall through to main/master rather than hide the whole repo.
+///
 /// # Errors
 ///
 /// Returns `Err` if no default branch is found.
@@ -69,9 +74,11 @@ fn default_branch_and_sha(repo: &Path) -> Result<(String, String)> {
         &["symbolic-ref", "--short", "refs/remotes/origin/HEAD"],
     ) {
         if let Some(branch) = sym.strip_prefix("origin/") {
-            // Resolve the SHA for origin/HEAD's branch
-            let sha = git(repo, &["rev-parse", &format!("refs/heads/{branch}")])?;
-            return Ok((branch.to_string(), sha));
+            // Only honour origin/HEAD when its branch resolves locally; otherwise
+            // fall through so a stale pointer doesn't make the repo disappear.
+            if let Ok(sha) = git(repo, &["rev-parse", &format!("refs/heads/{branch}")]) {
+                return Ok((branch.to_string(), sha));
+            }
         }
     }
     for candidate in ["main", "master"] {
