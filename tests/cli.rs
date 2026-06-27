@@ -622,14 +622,11 @@ fn scoped_refresh_does_not_prune_other_inventory() {
     loops(&home).assert().success();
 
     let inv_dir = home.join("inventory");
-    let count_json = || {
-        std::fs::read_dir(&inv_dir)
-            .unwrap()
-            .flatten()
-            .filter(|e| e.path().extension().is_some_and(|x| x == "json"))
-            .count()
-    };
-    assert_eq!(count_json(), 2, "expected one inventory file per repo");
+    assert_eq!(
+        count_inventory_json(&inv_dir),
+        2,
+        "expected one inventory file per repo"
+    );
 
     loops(&home)
         .args(["refresh", "repo:api"])
@@ -638,7 +635,7 @@ fn scoped_refresh_does_not_prune_other_inventory() {
         .stderr(predicate::str::contains("refreshed 1 repo"));
 
     assert_eq!(
-        count_json(),
+        count_inventory_json(&inv_dir),
         2,
         "scoped refresh must not delete inventory for repos outside the query"
     );
@@ -688,6 +685,17 @@ fn repo_with_feature(root: &Path, name: &str) {
     std::fs::write(repo.join("b.txt"), format!("feat-{name}")).unwrap();
     git(&repo, &["add", "."]);
     git(&repo, &["commit", "-m", "feat"]);
+}
+
+/// Counts inventory `*.json` files in `dir` (0 if the dir is absent).
+fn count_inventory_json(dir: &Path) -> usize {
+    std::fs::read_dir(dir)
+        .map(|rd| {
+            rd.flatten()
+                .filter(|e| e.path().extension().is_some_and(|x| x == "json"))
+                .count()
+        })
+        .unwrap_or(0)
 }
 
 /// `loops refresh <bare-word>` must scope the reindex to repos the same query
@@ -745,14 +753,11 @@ fn refresh_prunes_disk_gone_repo_even_when_out_of_scope() {
     loops(&home).assert().success();
 
     let inv_dir = home.join("inventory");
-    let count_json = || {
-        std::fs::read_dir(&inv_dir)
-            .unwrap()
-            .flatten()
-            .filter(|e| e.path().extension().is_some_and(|x| x == "json"))
-            .count()
-    };
-    assert_eq!(count_json(), 3, "one inventory file per repo");
+    assert_eq!(
+        count_inventory_json(&inv_dir),
+        3,
+        "one inventory file per repo"
+    );
 
     // web-1 disappears from disk; it is now an orphan.
     std::fs::remove_dir_all(projects.join("web-1")).unwrap();
@@ -765,7 +770,11 @@ fn refresh_prunes_disk_gone_repo_even_when_out_of_scope() {
         .stderr(predicate::str::contains("refreshed 2 repos"))
         .stderr(predicate::str::contains("removed orphan inventory"));
 
-    assert_eq!(count_json(), 2, "disk-gone web-1 inventory must be pruned");
+    assert_eq!(
+        count_inventory_json(&inv_dir),
+        2,
+        "disk-gone web-1 inventory must be pruned"
+    );
 }
 
 /// Proves the memo is actually read on a warm scan and that `--fresh` bypasses
@@ -809,4 +818,153 @@ fn cache_hit_serves_memo_and_fresh_recomputes() {
         .assert()
         .success()
         .stderr(predicate::str::contains("No loops match"));
+}
+
+/// `loops refresh branch:<x>` is an in-memory filter, so run_refresh must scope
+/// the reindex by it too (not just `repo:`/`root:`).
+#[test]
+fn refresh_branch_filter_scopes_to_matching_branch() {
+    let tmp = tempfile::tempdir().unwrap();
+    let home = tmp.path().join("home");
+    let projects = tmp.path().join("projects");
+    // Two repos with DISTINCT branch names so branch: selects exactly one.
+    for (name, branch) in [("api", "feat/login"), ("web", "feat/cart")] {
+        let repo = projects.join(name);
+        std::fs::create_dir_all(&repo).unwrap();
+        git(&repo, &["init", "-b", "main"]);
+        std::fs::write(repo.join("a.txt"), format!("base-{name}")).unwrap();
+        git(&repo, &["add", "."]);
+        git(&repo, &["commit", "-m", "init"]);
+        git(&repo, &["checkout", "-b", branch]);
+        std::fs::write(repo.join("b.txt"), format!("feat-{name}")).unwrap();
+        git(&repo, &["add", "."]);
+        git(&repo, &["commit", "-m", "feat"]);
+    }
+
+    loops(&home).arg("init").arg(&projects).assert().success();
+    loops(&home).assert().success();
+
+    loops(&home)
+        .args(["refresh", "branch:login"])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("refreshed 1 repo"));
+}
+
+/// A query that matches nothing reindexes nothing (and does not error/panic).
+#[test]
+fn refresh_no_match_reindexes_nothing() {
+    let tmp = tempfile::tempdir().unwrap();
+    let home = tmp.path().join("home");
+    let projects = tmp.path().join("projects");
+    for name in ["alpha", "beta"] {
+        repo_with_feature(&projects, name);
+    }
+
+    loops(&home).arg("init").arg(&projects).assert().success();
+    loops(&home).assert().success();
+
+    loops(&home)
+        .args(["refresh", "zzz-no-such-repo-or-branch"])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("refreshed 0 repos"));
+}
+
+/// Two worktrees of one repo share a single common-dir, so they must map to
+/// exactly ONE inventory file (the worktree-safety invariant run_refresh's
+/// HEAD-sha scoping relies on). Both unmerged branches must still be listed.
+#[test]
+fn worktrees_of_one_repo_share_a_single_inventory_file() {
+    let tmp = tempfile::tempdir().unwrap();
+    let home = tmp.path().join("home");
+    let root = tmp.path().join("projects");
+    let repo = root.join("app");
+    std::fs::create_dir_all(&repo).unwrap();
+    git(&repo, &["init", "-b", "main"]);
+    std::fs::write(repo.join("a.txt"), "a").unwrap();
+    git(&repo, &["add", "."]);
+    git(&repo, &["commit", "-m", "init"]);
+    // First unmerged branch in the primary checkout.
+    git(&repo, &["checkout", "-b", "feat/x"]);
+    std::fs::write(repo.join("b.txt"), "b").unwrap();
+    git(&repo, &["add", "."]);
+    git(&repo, &["commit", "-m", "feat x"]);
+    git(&repo, &["checkout", "main"]);
+    // Second unmerged branch in a linked worktree (shares the common-dir).
+    let wt = tmp.path().join("wt-y");
+    git(
+        &repo,
+        &["worktree", "add", wt.to_str().unwrap(), "-b", "feat/y"],
+    );
+    std::fs::write(wt.join("c.txt"), "c").unwrap();
+    git(&wt, &["add", "."]);
+    git(&wt, &["commit", "-m", "feat y"]);
+
+    loops(&home).arg("init").arg(&root).assert().success();
+    loops(&home)
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("feat/x"))
+        .stdout(predicate::str::contains("feat/y"));
+
+    assert_eq!(
+        count_inventory_json(&home.join("inventory")),
+        1,
+        "two worktrees of one repo must share a single inventory file"
+    );
+}
+
+/// BUG-2 regression: concurrent `loops --fresh` processes writing the same
+/// inventory must not race on the tmp file. Asserts every process exits 0, no
+/// `.tmp` is left behind, and every inventory JSON parses.
+#[test]
+fn inventory_writes_survive_concurrent_processes() {
+    let tmp = tempfile::tempdir().unwrap();
+    let home = tmp.path().join("home");
+    let projects = tmp.path().join("projects");
+    for name in ["api", "web", "cli"] {
+        repo_with_feature(&projects, name);
+    }
+    loops(&home).arg("init").arg(&projects).assert().success();
+
+    let bin = env!("CARGO_BIN_EXE_loops");
+    let handles: Vec<_> = (0..8)
+        .map(|_| {
+            let home = home.clone();
+            let bin = bin.to_string();
+            std::thread::spawn(move || {
+                std::process::Command::new(bin)
+                    .env("OPEN_LOOPS_HOME", &home)
+                    .arg("--fresh")
+                    .output()
+                    .unwrap()
+            })
+        })
+        .collect();
+    for h in handles {
+        let out = h.join().unwrap();
+        assert!(out.status.success(), "concurrent scan exited non-zero");
+    }
+
+    let inv_dir = home.join("inventory");
+    let mut tmp_left = 0;
+    for entry in std::fs::read_dir(&inv_dir).unwrap().flatten() {
+        let path = entry.path();
+        match path.extension().and_then(|e| e.to_str()) {
+            Some("tmp") => tmp_left += 1,
+            Some("json") => {
+                let raw = std::fs::read_to_string(&path).unwrap();
+                serde_json::from_str::<serde_json::Value>(&raw)
+                    .unwrap_or_else(|e| panic!("corrupt inventory {}: {e}", path.display()));
+            }
+            _ => {}
+        }
+    }
+    assert_eq!(tmp_left, 0, "no .tmp file should survive concurrent writes");
+    assert_eq!(
+        count_inventory_json(&inv_dir),
+        3,
+        "all three repos' inventory must be present and valid"
+    );
 }
