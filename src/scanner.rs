@@ -53,22 +53,33 @@ pub(crate) fn git(repo: &Path, args: &[&str]) -> Result<String> {
 ///
 /// Returns `Err` if no default branch is found.
 pub fn default_branch(repo: &Path) -> Result<String> {
+    let (name, _) = default_branch_and_sha(repo)?;
+    Ok(name)
+}
+
+/// Default branch name and its SHA, resolved in a single rev-parse call.
+/// Used internally to avoid redundant git calls in the heavy phase.
+///
+/// # Errors
+///
+/// Returns `Err` if no default branch is found.
+fn default_branch_and_sha(repo: &Path) -> Result<(String, String)> {
     if let Ok(sym) = git(
         repo,
         &["symbolic-ref", "--short", "refs/remotes/origin/HEAD"],
     ) {
         if let Some(branch) = sym.strip_prefix("origin/") {
-            return Ok(branch.to_string());
+            // Resolve the SHA for origin/HEAD's branch
+            let sha = git(repo, &["rev-parse", &format!("refs/heads/{branch}")])?;
+            return Ok((branch.to_string(), sha));
         }
     }
     for candidate in ["main", "master"] {
-        if git(
+        if let Ok(sha) = git(
             repo,
             &["rev-parse", "--verify", &format!("refs/heads/{candidate}")],
-        )
-        .is_ok()
-        {
-            return Ok(candidate.to_string());
+        ) {
+            return Ok((candidate.to_string(), sha));
         }
     }
     bail!(
@@ -143,6 +154,15 @@ pub fn git_common_dir(path: &Path) -> Result<PathBuf> {
     )?;
     Ok(PathBuf::from(raw))
 }
+
+// PERF-1: git_common_dir is called twice per repo — once in dedup_candidates
+// (computed but not stored), and again in open_loops. Reusing the value from
+// dedup would require changing RepoCandidate or open_loops's public signature.
+// Both are internal, but threading the common_dir through without altering the
+// public API would require wrapping it in a private helper that cli.rs doesn't call.
+// Current cost: negligible (one extra git call per repo per scan), acceptable
+// trade-off for keeping the public signature stable. Revisit if scan latency
+// becomes dominated by this call (measure: `time loops scan --fresh`).
 
 /// One entry from `git worktree list --porcelain`.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -294,7 +314,9 @@ pub fn open_loops(
     root_label: &str,
     opts: &ScanOptions,
 ) -> Result<(Vec<OpenLoop>, Option<InvUpdate>)> {
-    let default = default_branch(repo)?;
+    // Resolve default branch and its SHA once (PERF-2: avoid duplicate rev-parse).
+    let (default, default_sha) = default_branch_and_sha(repo)?;
+
     let common_dir = git_common_dir(repo)?;
     let repo_name = repo_name_from_common_dir(&common_dir);
     let worktrees = worktree_map(repo).unwrap_or_else(|e| {
@@ -323,12 +345,8 @@ pub fn open_loops(
     // Determine whether to use the inventory memo for this scan.
     let use_inventory = opts.need_ahead_behind && opts.inventory_dir.is_some();
 
-    // Fetch the default-branch SHA once (used as `ab_base_sha` in all memos).
-    let default_sha = if use_inventory {
-        git(repo, &["rev-parse", &format!("refs/heads/{default}")]).unwrap_or_default()
-    } else {
-        String::new()
-    };
+    // Robustness: if default_sha is empty, skip memoisation to avoid poisoning the cache.
+    let use_inventory = use_inventory && !default_sha.is_empty();
 
     let hash = if use_inventory {
         inventory::common_dir_hash(&common_dir)
@@ -337,11 +355,16 @@ pub fn open_loops(
     };
 
     // Load the existing inventory file unless `--fresh` was requested.
+    // Destructure inventory_dir once to avoid .unwrap() landmine.
     let existing: Option<InventoryFile> = if use_inventory && !opts.fresh {
-        let store = InventoryStore {
-            dir: opts.inventory_dir.as_ref().unwrap().clone(),
-        };
-        store.load(&hash)
+        if let Some(inv_dir) = &opts.inventory_dir {
+            let store = InventoryStore {
+                dir: inv_dir.clone(),
+            };
+            store.load(&hash)
+        } else {
+            None
+        }
     } else {
         None
     };
