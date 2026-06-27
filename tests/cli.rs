@@ -685,6 +685,9 @@ fn repo_with_feature(root: &Path, name: &str) {
     std::fs::write(repo.join("b.txt"), format!("feat-{name}")).unwrap();
     git(&repo, &["add", "."]);
     git(&repo, &["commit", "-m", "feat"]);
+    // Leave the repo on its default branch so callers that add worktrees or set
+    // origin/HEAD start from a clean main checkout.
+    git(&repo, &["checkout", "main"]);
 }
 
 /// Counts inventory `*.json` files in `dir` (0 if the dir is absent).
@@ -879,18 +882,9 @@ fn worktrees_of_one_repo_share_a_single_inventory_file() {
     let tmp = tempfile::tempdir().unwrap();
     let home = tmp.path().join("home");
     let root = tmp.path().join("projects");
+    // Primary checkout: main + one unmerged feat/x, left on main.
+    repo_with_feature(&root, "app");
     let repo = root.join("app");
-    std::fs::create_dir_all(&repo).unwrap();
-    git(&repo, &["init", "-b", "main"]);
-    std::fs::write(repo.join("a.txt"), "a").unwrap();
-    git(&repo, &["add", "."]);
-    git(&repo, &["commit", "-m", "init"]);
-    // First unmerged branch in the primary checkout.
-    git(&repo, &["checkout", "-b", "feat/x"]);
-    std::fs::write(repo.join("b.txt"), "b").unwrap();
-    git(&repo, &["add", "."]);
-    git(&repo, &["commit", "-m", "feat x"]);
-    git(&repo, &["checkout", "main"]);
     // Second unmerged branch in a linked worktree (shares the common-dir).
     let wt = tmp.path().join("wt-y");
     git(
@@ -976,17 +970,8 @@ fn stale_origin_head_falls_back_to_main() {
     let tmp = tempfile::tempdir().unwrap();
     let home = tmp.path().join("home");
     let root = tmp.path().join("projects");
+    repo_with_feature(&root, "app");
     let repo = root.join("app");
-    std::fs::create_dir_all(&repo).unwrap();
-    git(&repo, &["init", "-b", "main"]);
-    std::fs::write(repo.join("a.txt"), "a").unwrap();
-    git(&repo, &["add", "."]);
-    git(&repo, &["commit", "-m", "init"]);
-    git(&repo, &["checkout", "-b", "feat/x"]);
-    std::fs::write(repo.join("b.txt"), "b").unwrap();
-    git(&repo, &["add", "."]);
-    git(&repo, &["commit", "-m", "feat"]);
-    git(&repo, &["checkout", "main"]);
     // origin/HEAD points at a branch with no local ref (stale pointer).
     git(
         &repo,
@@ -1004,4 +989,40 @@ fn stale_origin_head_falls_back_to_main() {
         .assert()
         .success()
         .stdout(predicate::str::contains("app/feat/x"));
+}
+
+/// A corrupt inventory file for a repo that IS in the refresh scope is rewritten
+/// valid by write-through BEFORE prune runs, so it survives (not reclaimed). The
+/// prune-as-unreadable path only fires for files outside the scanned set.
+#[test]
+fn refresh_rewrites_corrupt_inventory_for_in_scope_repo() {
+    let tmp = tempfile::tempdir().unwrap();
+    let home = tmp.path().join("home");
+    let projects = tmp.path().join("projects");
+    repo_with_feature(&projects, "app");
+
+    loops(&home).arg("init").arg(&projects).assert().success();
+    loops(&home).assert().success();
+
+    // Corrupt the cached inventory for the (live, in-scope) repo.
+    let inv_dir = home.join("inventory");
+    let inv_file = std::fs::read_dir(&inv_dir)
+        .unwrap()
+        .flatten()
+        .find(|e| e.path().extension().is_some_and(|x| x == "json"))
+        .unwrap()
+        .path();
+    std::fs::write(&inv_file, b"{ corrupt").unwrap();
+
+    // refresh scans the repo → write-through rewrites the file valid before prune.
+    loops(&home).arg("refresh").assert().success();
+
+    assert_eq!(
+        count_inventory_json(&inv_dir),
+        1,
+        "in-scope file must survive"
+    );
+    let raw = std::fs::read_to_string(&inv_file).unwrap();
+    serde_json::from_str::<serde_json::Value>(&raw)
+        .expect("inventory must be valid JSON again after refresh");
 }
