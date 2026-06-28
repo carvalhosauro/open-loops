@@ -1,6 +1,7 @@
 //! Query parsing and in-memory evaluation. Pure: no git, no I/O.
 //! Grammar lives in ADR 0003. This module turns a query string into a
 //! `ScanPlan` and decides whether a candidate loop matches it.
+use crate::config::Config;
 use anyhow::{bail, Result};
 use chrono::{DateTime, Duration, Utc};
 
@@ -39,11 +40,11 @@ pub enum AttrFilter {
 pub struct ScanPlan {
     /// Bare terms; each must substring-match repo, branch, or key (AND across terms).
     pub terms: Vec<String>,
-    pub repo_filter: Option<String>,
-    pub branch_filter: Option<String>,
-    pub key_filter: Option<String>,
-    /// Raw `root:` value; resolved against configured roots in Phase 2 push-down.
-    pub root_filter: Option<String>,
+    pub repo_filters: Vec<String>,
+    pub branch_filters: Vec<String>,
+    pub key_filters: Vec<String>,
+    /// Raw `root:` values; resolved against configured roots in Phase 2 push-down.
+    pub root_filters: Vec<String>,
     pub attr_filters: Vec<AttrFilter>,
     /// `+ignored` includes dismissed loops; default hides them.
     pub include_ignored: bool,
@@ -80,21 +81,15 @@ pub fn parse(input: &str) -> Result<ScanPlan> {
             "+stale" => bail!("'+stale' is not supported yet (ADR 0003 phase 5)"),
             _ => {}
         }
-        if let Some(name) = tok.strip_prefix('@') {
-            bail!(
-                "contexts (@{}) are not supported yet (ADR 0003 phase 4)",
-                name
-            );
-        }
         if tok.starts_with(':') {
             bail!("reports ({tok}) are not supported yet (ADR 0003 phase 5)");
         }
         if let Some((name, val)) = split_attr(tok) {
             match name {
-                "repo" => plan.repo_filter = Some(val.to_string()),
-                "branch" => plan.branch_filter = Some(val.to_string()),
-                "key" => plan.key_filter = Some(val.to_string()),
-                "root" => plan.root_filter = Some(val.to_string()),
+                "repo" => plan.repo_filters.push(val.to_string()),
+                "branch" => plan.branch_filters.push(val.to_string()),
+                "key" => plan.key_filters.push(val.to_string()),
+                "root" => plan.root_filters.push(val.to_string()),
                 "idle" => {
                     let (cmp, rest) = split_cmp(val, true)
                         .ok_or_else(|| anyhow::anyhow!("idle needs a comparator, e.g. idle:>7d"))?;
@@ -122,6 +117,108 @@ pub fn parse(input: &str) -> Result<ScanPlan> {
         }
     }
     Ok(plan)
+}
+
+/// Options for [`resolve_plan`]. The caller resolves `LOOPS_CONTEXT` vs config precedence.
+pub struct ResolveOptions<'a> {
+    pub default_context: Option<&'a str>,
+}
+
+/// Merges two plans with AND semantics across filters and OR across flags.
+pub fn merge_scan_plans(base: ScanPlan, overlay: ScanPlan) -> ScanPlan {
+    ScanPlan {
+        terms: {
+            let mut terms = base.terms;
+            terms.extend(overlay.terms);
+            terms
+        },
+        repo_filters: {
+            let mut filters = base.repo_filters;
+            filters.extend(overlay.repo_filters);
+            filters
+        },
+        branch_filters: {
+            let mut filters = base.branch_filters;
+            filters.extend(overlay.branch_filters);
+            filters
+        },
+        key_filters: {
+            let mut filters = base.key_filters;
+            filters.extend(overlay.key_filters);
+            filters
+        },
+        root_filters: {
+            let mut filters = base.root_filters;
+            filters.extend(overlay.root_filters);
+            filters
+        },
+        attr_filters: {
+            let mut filters = base.attr_filters;
+            filters.extend(overlay.attr_filters);
+            filters
+        },
+        include_ignored: base.include_ignored || overlay.include_ignored,
+        need_ahead_behind: base.need_ahead_behind || overlay.need_ahead_behind,
+    }
+}
+
+fn validate_context_filter(name: &str, filter: &str) -> Result<()> {
+    if filter.contains('@') {
+        bail!("context '{name}' filter cannot contain '@' or ':' (reports are phase 5)");
+    }
+    for tok in filter.split_whitespace() {
+        if tok.starts_with(':') {
+            bail!("context '{name}' filter cannot contain '@' or ':' (reports are phase 5)");
+        }
+    }
+    Ok(())
+}
+
+/// Resolves `@context` tokens and default context into a single [`ScanPlan`].
+pub fn resolve_plan(input: &str, cfg: &Config, opts: &ResolveOptions) -> Result<ScanPlan> {
+    let tokens: Vec<&str> = input.split_whitespace().collect();
+    let at_count = tokens.iter().filter(|t| t.starts_with('@')).count();
+    if at_count > 1 {
+        bail!("only one @context per query");
+    }
+
+    let has_at = at_count == 1;
+    let mut plans = Vec::new();
+
+    if !has_at {
+        if let Some(ctx) = opts.default_context {
+            let filter = cfg.context_filter(ctx)?;
+            validate_context_filter(ctx, filter)?;
+            plans.push(parse(filter)?);
+        }
+    }
+
+    let mut user_tokens = Vec::new();
+    for tok in tokens {
+        if let Some(name) = tok.strip_prefix('@') {
+            if name == "none" || name == "all" {
+                continue;
+            }
+            let filter = cfg.context_filter(name)?;
+            validate_context_filter(name, filter)?;
+            plans.push(parse(filter)?);
+        } else {
+            user_tokens.push(tok);
+        }
+    }
+
+    if !user_tokens.is_empty() {
+        plans.push(parse(&user_tokens.join(" "))?);
+    }
+
+    match plans.len() {
+        0 => Ok(ScanPlan::default()),
+        1 => Ok(plans.remove(0)),
+        _ => Ok(plans
+            .into_iter()
+            .reduce(merge_scan_plans)
+            .expect("len checked >= 2")),
+    }
 }
 
 /// Returns `(name, value)` when `tok` is `name:value` and `name` is a known
@@ -177,7 +274,7 @@ pub fn parse_duration(s: &str) -> Result<Duration> {
 
 impl ScanPlan {
     /// True when the candidate satisfies every term, substring filter, and
-    /// attribute. `root_filter` is intentionally ignored here (push-down).
+    /// attribute. `root_filters` are intentionally ignored here (push-down).
     pub fn matches(&self, c: &Candidate, now: DateTime<Utc>) -> bool {
         if c.ignored && !self.include_ignored {
             return false;
@@ -189,17 +286,17 @@ impl ScanPlan {
                 return false;
             }
         }
-        if let Some(f) = &self.repo_filter {
+        for f in &self.repo_filters {
             if !contains_ci(c.repo_name, f) {
                 return false;
             }
         }
-        if let Some(f) = &self.branch_filter {
+        for f in &self.branch_filters {
             if !contains_ci(c.branch, f) {
                 return false;
             }
         }
-        if let Some(f) = &self.key_filter {
+        for f in &self.key_filters {
             if !contains_ci(c.key, f) {
                 return false;
             }
@@ -227,15 +324,44 @@ impl ScanPlan {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::{Config, ContextDef};
+    use std::collections::BTreeMap;
+
+    fn test_cfg() -> Config {
+        Config {
+            default_context: Some("work".into()),
+            contexts: BTreeMap::from([
+                (
+                    "work".into(),
+                    ContextDef {
+                        filter: "root:~/work".into(),
+                    },
+                ),
+                (
+                    "personal".into(),
+                    ContextDef {
+                        filter: "root:~/personal".into(),
+                    },
+                ),
+                (
+                    "recent-work".into(),
+                    ContextDef {
+                        filter: "root:~/work idle:<=30d".into(),
+                    },
+                ),
+            ]),
+            ..Config::default()
+        }
+    }
 
     #[test]
     fn parse_bare_terms_and_substring_attrs() {
         let p = parse("api feat/login repo:billing branch:fix/ key:work/api root:~/work").unwrap();
         assert_eq!(p.terms, vec!["api".to_string(), "feat/login".to_string()]);
-        assert_eq!(p.repo_filter.as_deref(), Some("billing"));
-        assert_eq!(p.branch_filter.as_deref(), Some("fix/"));
-        assert_eq!(p.key_filter.as_deref(), Some("work/api"));
-        assert_eq!(p.root_filter.as_deref(), Some("~/work"));
+        assert_eq!(p.repo_filters, vec!["billing".to_string()]);
+        assert_eq!(p.branch_filters, vec!["fix/".to_string()]);
+        assert_eq!(p.key_filters, vec!["work/api".to_string()]);
+        assert_eq!(p.root_filters, vec!["~/work".to_string()]);
         assert!(!p.need_ahead_behind);
     }
 
@@ -289,10 +415,119 @@ mod tests {
     }
 
     #[test]
-    fn reserved_context_report_stale_error_clearly() {
-        assert!(parse("@work").unwrap_err().to_string().contains("context"));
+    fn reserved_report_and_stale_error_clearly() {
         assert!(parse(":hot").unwrap_err().to_string().contains("report"));
         assert!(parse("+stale").unwrap_err().to_string().contains("stale"));
+    }
+
+    #[test]
+    fn merge_scan_plans_combines_root_filters() {
+        let a = parse("root:~/work").unwrap();
+        let b = parse("root:~/personal").unwrap();
+        let merged = merge_scan_plans(a, b);
+        assert_eq!(
+            merged.root_filters,
+            vec!["~/work".to_string(), "~/personal".to_string()]
+        );
+    }
+
+    #[test]
+    fn resolve_plan_applies_default_context() {
+        let cfg = test_cfg();
+        let opts = ResolveOptions {
+            default_context: cfg.default_context.as_deref(),
+        };
+        let expected = parse("root:~/work api").unwrap();
+        let got = resolve_plan("api", &cfg, &opts).unwrap();
+        assert_eq!(got, expected);
+    }
+
+    #[test]
+    fn resolve_plan_explicit_context_replaces_default() {
+        let cfg = test_cfg();
+        let opts = ResolveOptions {
+            default_context: cfg.default_context.as_deref(),
+        };
+        let expected = parse("root:~/personal api").unwrap();
+        let got = resolve_plan("@personal api", &cfg, &opts).unwrap();
+        assert_eq!(got, expected);
+    }
+
+    #[test]
+    fn resolve_plan_none_clears_default() {
+        let cfg = test_cfg();
+        let opts = ResolveOptions {
+            default_context: cfg.default_context.as_deref(),
+        };
+        let expected = parse("api").unwrap();
+        let got = resolve_plan("@none api", &cfg, &opts).unwrap();
+        assert_eq!(got, expected);
+    }
+
+    #[test]
+    fn resolve_plan_unknown_context_errors() {
+        let cfg = test_cfg();
+        let opts = ResolveOptions {
+            default_context: cfg.default_context.as_deref(),
+        };
+        let err = resolve_plan("@missing", &cfg, &opts)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("unknown context '@missing'"), "got: {err}");
+    }
+
+    #[test]
+    fn resolve_plan_context_with_idle_filter() {
+        let cfg = test_cfg();
+        let opts = ResolveOptions {
+            default_context: None,
+        };
+        let plan = resolve_plan("@recent-work", &cfg, &opts).unwrap();
+        assert_eq!(plan.root_filters, vec!["~/work".to_string()]);
+        assert_eq!(
+            plan.attr_filters,
+            vec![AttrFilter::Idle(Cmp::Le, Duration::days(30))]
+        );
+    }
+
+    #[test]
+    fn resolve_plan_rejects_nested_context_in_filter() {
+        let cfg = Config {
+            contexts: BTreeMap::from([(
+                "bad".into(),
+                ContextDef {
+                    filter: "@work".into(),
+                },
+            )]),
+            ..Config::default()
+        };
+        let opts = ResolveOptions {
+            default_context: None,
+        };
+        let err = resolve_plan("@bad", &cfg, &opts).unwrap_err().to_string();
+        assert!(err.contains("cannot contain '@' or ':'"), "got: {err}");
+    }
+
+    #[test]
+    fn resolve_plan_rejects_two_context_tokens() {
+        let cfg = test_cfg();
+        let opts = ResolveOptions {
+            default_context: None,
+        };
+        let err = resolve_plan("@work @personal", &cfg, &opts)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("only one @context per query"), "got: {err}");
+    }
+
+    #[test]
+    fn resolve_plan_report_still_errors() {
+        let cfg = test_cfg();
+        let opts = ResolveOptions {
+            default_context: None,
+        };
+        let err = resolve_plan(":hot", &cfg, &opts).unwrap_err().to_string();
+        assert!(err.contains("report"), "got: {err}");
     }
 
     fn cand<'a>(repo: &'a str, branch: &'a str, key: &'a str, days_idle: i64) -> Candidate<'a> {

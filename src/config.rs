@@ -124,7 +124,7 @@ impl Config {
         Ok(out)
     }
 
-    /// Subset of configured roots matching `plan.root_filter`. Path values are
+    /// Subset of configured roots matching `plan.root_filters`. Path values are
     /// tilde-expanded and canonicalized, then matched as a prefix against roots
     /// (ADR 0003). Label/path substring match is a fallback for short aliases.
     pub fn resolve_scan_roots(
@@ -132,7 +132,7 @@ impl Config {
         plan: &crate::query::ScanPlan,
     ) -> Result<Vec<std::path::PathBuf>> {
         let labels = self.resolve_labels()?;
-        let Some(filter) = &plan.root_filter else {
+        let Some(filter) = plan.root_filters.first() else {
             return Ok(self.roots.clone());
         };
         let mut prefix = expand_tilde(filter);

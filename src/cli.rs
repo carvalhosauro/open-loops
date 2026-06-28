@@ -70,7 +70,7 @@ fn scan_with_inventory(
         labels,
         cfg.scan_depth,
         &opts,
-        plan.repo_filter.as_deref(),
+        plan.repo_filters.first().map(|s| s.as_str()),
     );
     for w in &warnings {
         eprintln!("warning: {w}");
@@ -346,8 +346,8 @@ pub fn run_refresh(base: &Path, query: &str) -> Result<()> {
 /// has already scoped the scan and every scanned repo is in scope.
 fn has_in_memory_filter(plan: &crate::query::ScanPlan) -> bool {
     !plan.terms.is_empty()
-        || plan.branch_filter.is_some()
-        || plan.key_filter.is_some()
+        || !plan.branch_filters.is_empty()
+        || !plan.key_filters.is_empty()
         || !plan.attr_filters.is_empty()
 }
 
