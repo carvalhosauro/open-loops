@@ -6,6 +6,11 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ContextDef {
+    pub filter: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Config {
     /// Directories where git repositories are searched.
@@ -33,6 +38,12 @@ pub struct Config {
     /// match. 0 (default) means SHA-only validation with no time-based expiry.
     #[serde(default)]
     pub inventory_ttl_secs: u64,
+    /// Named context used when a query has no explicit `@context` token.
+    #[serde(default)]
+    pub default_context: Option<String>,
+    /// Named query scopes (`@name` in queries) mapped to filter strings.
+    #[serde(default)]
+    pub contexts: BTreeMap<String, ContextDef>,
 }
 
 fn default_llm_command() -> String {
@@ -68,11 +79,25 @@ impl Default for Config {
             max_session_kb: default_max_session_kb(),
             scan_depth: default_scan_depth(),
             inventory_ttl_secs: 0,
+            default_context: None,
+            contexts: BTreeMap::new(),
         }
     }
 }
 
 impl Config {
+    /// Returns the filter string for a named context.
+    pub fn context_filter(&self, name: &str) -> Result<&str> {
+        self.contexts
+            .get(name)
+            .map(|c| c.filter.as_str())
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "unknown context '@{name}'; define [contexts.{name}] in config.toml"
+                )
+            })
+    }
+
     /// Resolves a stable label per root (alias, else basename). Errors when two
     /// roots resolve to the same label and no alias disambiguates them.
     pub fn resolve_labels(&self) -> Result<Vec<(std::path::PathBuf, String)>> {
@@ -456,5 +481,59 @@ mod tests {
         let err = cfg.resolve_labels().unwrap_err().to_string();
         assert!(err.contains("share label"), "got: {err}");
         assert!(err.contains("alias"), "got: {err}");
+    }
+
+    #[test]
+    fn config_contexts_default_empty() {
+        let cfg = Config::default();
+        assert!(cfg.contexts.is_empty());
+        assert_eq!(cfg.default_context, None);
+    }
+
+    #[test]
+    fn config_contexts_roundtrip_from_toml() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = Store::new(tmp.path().join("state"));
+        let cfg = Config {
+            default_context: Some("work".into()),
+            contexts: BTreeMap::from([(
+                "work".into(),
+                ContextDef {
+                    filter: "root:work".into(),
+                },
+            )]),
+            ..Config::default()
+        };
+        store.save(&cfg).unwrap();
+        let loaded = store.load().unwrap();
+        assert_eq!(loaded.default_context, Some("work".into()));
+        assert_eq!(
+            loaded.contexts.get("work"),
+            Some(&ContextDef {
+                filter: "root:work".into(),
+            })
+        );
+    }
+
+    #[test]
+    fn context_filter_returns_filter_for_known_context() {
+        let cfg = Config {
+            contexts: BTreeMap::from([(
+                "work".into(),
+                ContextDef {
+                    filter: "root:work".into(),
+                },
+            )]),
+            ..Config::default()
+        };
+        assert_eq!(cfg.context_filter("work").unwrap(), "root:work");
+    }
+
+    #[test]
+    fn context_filter_errors_for_unknown_context() {
+        let cfg = Config::default();
+        let err = cfg.context_filter("missing").unwrap_err().to_string();
+        assert!(err.contains("unknown context '@missing'"), "got: {err}");
+        assert!(err.contains("[contexts.missing]"), "got: {err}");
     }
 }
