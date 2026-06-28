@@ -3,7 +3,7 @@
 //! so tests can inject a tempdir — nothing here reads environment variables.
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -127,14 +127,31 @@ impl Config {
     /// Subset of configured roots matching `plan.root_filters`. Path values are
     /// tilde-expanded and canonicalized, then matched as a prefix against roots
     /// (ADR 0003). Label/path substring match is a fallback for short aliases.
+    /// Multiple filters are ANDed (intersection).
     pub fn resolve_scan_roots(
         &self,
         plan: &crate::query::ScanPlan,
     ) -> Result<Vec<std::path::PathBuf>> {
-        let labels = self.resolve_labels()?;
-        let Some(filter) = plan.root_filters.first() else {
+        if plan.root_filters.is_empty() {
             return Ok(self.roots.clone());
-        };
+        }
+        let labels = self.resolve_labels()?;
+        let mut acc: Option<HashSet<PathBuf>> = None;
+        for filter in &plan.root_filters {
+            let subset = self.roots_matching_filter(filter, &labels)?;
+            acc = Some(match acc {
+                None => subset,
+                Some(prev) => prev.intersection(&subset).cloned().collect(),
+            });
+        }
+        Ok(acc.unwrap().into_iter().collect())
+    }
+
+    fn roots_matching_filter(
+        &self,
+        filter: &str,
+        labels: &[(PathBuf, String)],
+    ) -> Result<HashSet<PathBuf>> {
         let mut prefix = expand_tilde(filter);
         if prefix.exists() {
             if let Ok(canon) = std::fs::canonicalize(&prefix) {
@@ -143,9 +160,9 @@ impl Config {
         }
         let needle = filter.to_lowercase();
         Ok(labels
-            .into_iter()
+            .iter()
             .filter(|(root, label)| root_matches_filter(root, label, filter, &needle, &prefix))
-            .map(|(root, _)| root)
+            .map(|(root, _)| root.clone())
             .collect())
     }
 }
@@ -430,6 +447,55 @@ mod tests {
             .resolve_scan_roots(&crate::query::parse("root:w").unwrap())
             .unwrap();
         assert_eq!(matched, vec![work]);
+    }
+
+    #[test]
+    fn resolve_scan_roots_intersection_empty_when_filters_disjoint() {
+        let tmp = tempfile::tempdir().unwrap();
+        let work = tmp.path().join("work");
+        let personal = tmp.path().join("personal");
+        std::fs::create_dir_all(&work).unwrap();
+        std::fs::create_dir_all(&personal).unwrap();
+        let mut cfg = Config {
+            roots: vec![work.clone(), personal.clone()],
+            ..Config::default()
+        };
+        cfg.aliases
+            .insert(work.to_string_lossy().into_owned(), "w".into());
+
+        let plan = crate::query::ScanPlan {
+            root_filters: vec!["w".into(), "personal".into()],
+            ..Default::default()
+        };
+        let matched = cfg.resolve_scan_roots(&plan).unwrap();
+        assert!(matched.is_empty());
+    }
+
+    #[test]
+    fn resolve_scan_roots_single_filter_matches_same_as_one_root_token() {
+        let tmp = tempfile::tempdir().unwrap();
+        let work = tmp.path().join("work");
+        let personal = tmp.path().join("personal");
+        std::fs::create_dir_all(&work).unwrap();
+        std::fs::create_dir_all(&personal).unwrap();
+        let mut cfg = Config {
+            roots: vec![work.clone(), personal.clone()],
+            ..Config::default()
+        };
+        cfg.aliases
+            .insert(work.to_string_lossy().into_owned(), "w".into());
+
+        let via_parse = cfg
+            .resolve_scan_roots(&crate::query::parse("root:w").unwrap())
+            .unwrap();
+        let via_vec = cfg
+            .resolve_scan_roots(&crate::query::ScanPlan {
+                root_filters: vec!["w".into()],
+                ..Default::default()
+            })
+            .unwrap();
+        assert_eq!(via_vec, via_parse);
+        assert_eq!(via_vec, vec![work]);
     }
 
     #[test]
