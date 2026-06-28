@@ -38,6 +38,23 @@ Attributes: `repo:`, `branch:`, `key:`, `root:` (substring), `idle:` (needs a
 comparator, e.g. `idle:>7d`; units m/h/d/w), `ahead:`/`behind:` (`>`,`<`,`>=`,
 `<=`, or bare equality). Tags: `-ignored` (default), `+ignored`.
 
+### Contexts
+
+Named scopes via `@` tokens and config (`default_context`, `[contexts.X]`).
+A context is your daily universe — work vs personal — not the same as reports
+(`:` — coming in phase 5).
+
+```bash
+loops @work              # explicit scope
+loops                     # uses default_context when set
+loops @none               # full universe, ignore default
+loops @work api idle:>7d  # compose context + ad-hoc filters
+```
+
+`@none` and `@all` clear the default context for one invocation. Explicit `@ctx`
+replaces `default_context`. Only one `@` token per query. See
+`docs/configuration.md` for config and `LOOPS_CONTEXT`.
+
 ## `loops refresh [query]` — reindex inventory
 
 ```bash

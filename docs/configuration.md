@@ -13,6 +13,37 @@ Override the base directory: `OPEN_LOOPS_HOME` environment variable.
 | `max_session_kb` | integer | `50` | KB read from the end of each session |
 | `aliases` | table | `{}` | Per-root label override, keyed by canonical root path (resolves key collisions) |
 | `inventory_ttl_secs` | integer | `0` | Seconds before a cached ahead/behind entry expires; `0` = SHA-only validation, no time-based expiry |
+| `default_context` | string | — | Named context applied when the query has no `@` token |
+| `[contexts.X]` | table | — | Saved scope; `filter` is a query string |
+
+## Contexts
+
+Define named scopes so you do not repeat `root:` on every invocation:
+
+```toml
+default_context = "work"
+
+[contexts.work]
+filter = "root:~/work"
+
+[contexts.personal]
+filter = "root:~/personal"
+
+[contexts.recent-work]
+filter = "root:~/work idle:<=30d"
+```
+
+Each `filter` is a full query fragment (`root:`, `repo:`, `idle:>7d`, bare terms,
+`+ignored`, etc.). Context filters cannot contain `@` or `:` (reports are phase 5).
+
+When the query has no `@` token, `default_context` applies automatically. Override
+per shell or session with `LOOPS_CONTEXT` — it wins over `default_context` in
+config. An empty `LOOPS_CONTEXT` is treated as unset.
+
+```bash
+LOOPS_CONTEXT=personal loops    # same as default_context = "personal"
+loops @none                     # ignore default for one run
+```
 
 ## Repository discovery
 

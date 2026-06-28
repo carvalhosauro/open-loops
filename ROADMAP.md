@@ -101,16 +101,16 @@ Depende de: **Spec Fase A** (common-dir = identidade do hash), **ADR fase 2**
 - [x] `inventory_ttl_secs` no config (default 0 = só validação por SHA)
 - [x] limpeza preguiçosa de órfãos no `refresh` ([ADR 0004](docs/decisions/0004-fase2-evidence-snapshot.md))
 
-### ⬜ ADR fase 4 — contexts `@`  ·  [ADR 0003](docs/decisions/0003-query-engine.md)
+### ✅ ADR fase 4 — contexts `@`  ·  [ADR 0003](docs/decisions/0003-query-engine.md)
 
 Depende de: **ADR fase 2** (push-down)
 
-- [ ] parse de `@nome` resolve `[contexts.nome]` do config
-- [ ] `[contexts.X] filter = "..."` no `config.toml`
-- [ ] `@none` / `@all` limpam o context default
-- [ ] `default_context` (config) + `LOOPS_CONTEXT` (env) — só valem sem `@` na query
-- [ ] `@ctx` explícito substitui o `default_context`
-- [ ] remover erro "contexts not supported yet" do parser
+- [x] parse de `@nome` resolve `[contexts.nome]` do config
+- [x] `[contexts.X] filter = "..."` no `config.toml`
+- [x] `@none` / `@all` limpam o context default
+- [x] `default_context` (config) + `LOOPS_CONTEXT` (env) — só valem sem `@` na query
+- [x] `@ctx` explícito substitui o `default_context`
+- [x] remover erro "contexts not supported yet" do parser
 
 ### ⬜ ADR fase 5 — reports `:` + `+stale` + help  ·  [ADR 0003](docs/decisions/0003-query-engine.md)
 
