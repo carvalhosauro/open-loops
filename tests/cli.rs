@@ -1,5 +1,6 @@
 //! E2E: real binary, real git repos, LLM replaced by `cat`.
 use assert_cmd::Command;
+use open_loops::config::{ContextDef, Store};
 use open_loops::sessions::claude_code::encode_project_path;
 use predicates::prelude::*;
 use std::path::Path;
@@ -1025,4 +1026,236 @@ fn refresh_rewrites_corrupt_inventory_for_in_scope_repo() {
     let raw = std::fs::read_to_string(&inv_file).unwrap();
     serde_json::from_str::<serde_json::Value>(&raw)
         .expect("inventory must be valid JSON again after refresh");
+}
+
+/// Merges `default_context` and `[contexts.*]` into config (post-init).
+fn setup_contexts_config(
+    home: &Path,
+    work_root: &Path,
+    personal_root: &Path,
+    default: &str,
+    extra: &[(&str, &str)],
+) {
+    let store = Store::new(home.to_path_buf());
+    let mut cfg = store.load().unwrap();
+    cfg.default_context = Some(default.to_string());
+    cfg.contexts.insert(
+        "work".into(),
+        ContextDef {
+            filter: format!("root:{}", toml_path(work_root)),
+        },
+    );
+    cfg.contexts.insert(
+        "personal".into(),
+        ContextDef {
+            filter: format!("root:{}", toml_path(personal_root)),
+        },
+    );
+    for (name, filter) in extra {
+        cfg.contexts.insert(
+            (*name).into(),
+            ContextDef {
+                filter: (*filter).to_string(),
+            },
+        );
+    }
+    store.save(&cfg).unwrap();
+}
+
+/// Creates `work/` and `personal/` roots each holding one open-loop repo; returns keys.
+fn init_two_root_fixture(tmp: &Path, home: &Path) -> (String, String) {
+    let work_root = tmp.join("work");
+    let personal_root = tmp.join("personal");
+    repo_with_feature(&work_root, "work-app");
+    repo_with_feature(&personal_root, "personal-app");
+
+    loops(home)
+        .args([
+            "init",
+            work_root.to_str().unwrap(),
+            personal_root.to_str().unwrap(),
+        ])
+        .assert()
+        .success();
+
+    (
+        "work/work-app/feat/x".to_string(),
+        "personal/personal-app/feat/x".to_string(),
+    )
+}
+
+fn git_commit_with_date(repo: &Path, date: &str, message: &str) {
+    let ok = std::process::Command::new("git")
+        .arg("-C")
+        .arg(repo)
+        .args(["commit", "-m", message])
+        .env("GIT_AUTHOR_NAME", "t")
+        .env("GIT_AUTHOR_EMAIL", "t@t")
+        .env("GIT_COMMITTER_NAME", "t")
+        .env("GIT_COMMITTER_EMAIL", "t@t")
+        .env("GIT_AUTHOR_DATE", date)
+        .env("GIT_COMMITTER_DATE", date)
+        .output()
+        .unwrap()
+        .status
+        .success();
+    assert!(ok, "dated git commit failed");
+}
+
+#[test]
+fn context_default_scopes_roots() {
+    let tmp = tempfile::tempdir().unwrap();
+    let home = tmp.path().join("home");
+    let work_root = tmp.path().join("work");
+    let personal_root = tmp.path().join("personal");
+    let (work_key, personal_key) = init_two_root_fixture(tmp.path(), &home);
+    setup_contexts_config(&home, &work_root, &personal_root, "work", &[]);
+
+    loops(&home)
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(&work_key))
+        .stdout(predicate::str::contains(&personal_key).not());
+
+    loops(&home)
+        .env("LOOPS_CONTEXT", "personal")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(&personal_key))
+        .stdout(predicate::str::contains(&work_key).not());
+
+    loops(&home)
+        .arg("@none")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(&work_key))
+        .stdout(predicate::str::contains(&personal_key));
+}
+
+#[test]
+fn context_explicit_overrides_default() {
+    let tmp = tempfile::tempdir().unwrap();
+    let home = tmp.path().join("home");
+    let work_root = tmp.path().join("work");
+    let personal_root = tmp.path().join("personal");
+    let (work_key, personal_key) = init_two_root_fixture(tmp.path(), &home);
+    setup_contexts_config(&home, &work_root, &personal_root, "work", &[]);
+
+    loops(&home)
+        .arg("@personal")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(&personal_key))
+        .stdout(predicate::str::contains(&work_key).not());
+}
+
+#[test]
+fn context_with_idle_filter() {
+    let tmp = tempfile::tempdir().unwrap();
+    let home = tmp.path().join("home");
+    let work_root = tmp.path().join("work");
+    let personal_root = tmp.path().join("personal");
+    let repo = work_root.join("work-app");
+    std::fs::create_dir_all(&repo).unwrap();
+    git(&repo, &["init", "-b", "main"]);
+    std::fs::write(repo.join("a.txt"), "base").unwrap();
+    git(&repo, &["add", "."]);
+    git(&repo, &["commit", "-m", "init"]);
+
+    git(&repo, &["checkout", "-b", "feat/recent"]);
+    std::fs::write(repo.join("recent.txt"), "recent").unwrap();
+    git(&repo, &["add", "."]);
+    git(&repo, &["commit", "-m", "recent wip"]);
+    git(&repo, &["checkout", "main"]);
+
+    git(&repo, &["checkout", "-b", "feat/stale"]);
+    std::fs::write(repo.join("stale.txt"), "stale").unwrap();
+    git(&repo, &["add", "."]);
+    git_commit_with_date(&repo, "2020-01-01 00:00:00 +0000", "stale wip");
+    git(&repo, &["checkout", "main"]);
+
+    std::fs::create_dir_all(&personal_root).unwrap();
+    loops(&home)
+        .args([
+            "init",
+            work_root.to_str().unwrap(),
+            personal_root.to_str().unwrap(),
+        ])
+        .assert()
+        .success();
+
+    let recent_filter = format!("root:{} idle:<=30d", toml_path(&work_root));
+    setup_contexts_config(
+        &home,
+        &work_root,
+        &personal_root,
+        "work",
+        &[("recent", &recent_filter)],
+    );
+
+    loops(&home)
+        .arg("@recent")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("work/work-app/feat/recent"))
+        .stdout(predicate::str::contains("work/work-app/feat/stale").not());
+}
+
+#[test]
+fn context_unknown_errors() {
+    let tmp = tempfile::tempdir().unwrap();
+    let home = tmp.path().join("home");
+    let work_root = tmp.path().join("work");
+    let personal_root = tmp.path().join("personal");
+    init_two_root_fixture(tmp.path(), &home);
+    setup_contexts_config(&home, &work_root, &personal_root, "work", &[]);
+
+    loops(&home)
+        .arg("@nope")
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("[contexts.nope]"));
+}
+
+#[test]
+fn refresh_honours_context() {
+    let tmp = tempfile::tempdir().unwrap();
+    let home = tmp.path().join("home");
+    let work_root = tmp.path().join("work");
+    let personal_root = tmp.path().join("personal");
+    init_two_root_fixture(tmp.path(), &home);
+    setup_contexts_config(&home, &work_root, &personal_root, "work", &[]);
+
+    loops(&home).assert().success();
+
+    let inv_dir = home.join("inventory");
+    assert_eq!(
+        count_inventory_json(&inv_dir),
+        1,
+        "default context should index only the work root"
+    );
+
+    loops(&home)
+        .arg("refresh")
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("refreshed 1 repo"));
+
+    loops(&home)
+        .args(["refresh", "@personal"])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("refreshed 1 repo"));
+
+    assert_eq!(
+        count_inventory_json(&inv_dir),
+        2,
+        "refresh @personal must index the personal root without touching work scope on default refresh"
+    );
+
+    loops(&home)
+        .arg("refresh")
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("refreshed 1 repo"));
 }
