@@ -30,6 +30,12 @@ fn progress(msg: &str) {
     eprintln!("{msg}");
 }
 
+fn effective_default_context(cfg: &crate::config::Config) -> Option<String> {
+    std::env::var("LOOPS_CONTEXT")
+        .ok()
+        .or_else(|| cfg.default_context.clone())
+}
+
 /// Writes inventory updates produced by a scan to disk.
 fn write_inventory(
     inv_store: &InventoryStore,
@@ -85,7 +91,14 @@ fn resolve_loop(base: &Path, query: &str, fresh: bool) -> Result<OpenLoop> {
         !cfg.roots.is_empty(),
         "no roots configured. Run: loops init <dir-with-your-repos>"
     );
-    let mut plan = crate::query::parse(query)?;
+    let default = effective_default_context(&cfg);
+    let mut plan = crate::query::resolve_plan(
+        query,
+        &cfg,
+        &crate::query::ResolveOptions {
+            default_context: default.as_deref(),
+        },
+    )?;
     plan.include_ignored = true; // resume can target an ignored loop by key
     let labels = cfg.resolve_labels()?;
     let roots = cfg.resolve_scan_roots(&plan)?;
@@ -168,7 +181,14 @@ pub fn run_list(base: &Path, query: &str, fresh: bool) -> Result<()> {
         !cfg.roots.is_empty(),
         "no roots configured. Run: loops init <dir-with-your-repos>"
     );
-    let mut plan = crate::query::parse(query)?;
+    let default = effective_default_context(&cfg);
+    let mut plan = crate::query::resolve_plan(
+        query,
+        &cfg,
+        &crate::query::ResolveOptions {
+            default_context: default.as_deref(),
+        },
+    )?;
     plan.need_ahead_behind = true; // table always renders AHEAD/BEHIND columns
     let labels = cfg.resolve_labels()?;
     let roots = cfg.resolve_scan_roots(&plan)?;
@@ -281,7 +301,14 @@ pub fn run_refresh(base: &Path, query: &str) -> Result<()> {
         !cfg.roots.is_empty(),
         "no roots configured. Run: loops init <dir-with-your-repos>"
     );
-    let plan = crate::query::parse(query)?;
+    let default = effective_default_context(&cfg);
+    let plan = crate::query::resolve_plan(
+        query,
+        &cfg,
+        &crate::query::ResolveOptions {
+            default_context: default.as_deref(),
+        },
+    )?;
     let labels = cfg.resolve_labels()?;
     let roots = cfg.resolve_scan_roots(&plan)?;
     progress("scanning git repositories…");
