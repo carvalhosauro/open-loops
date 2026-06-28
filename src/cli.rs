@@ -33,6 +33,7 @@ fn progress(msg: &str) {
 fn effective_default_context(cfg: &crate::config::Config) -> Option<String> {
     std::env::var("LOOPS_CONTEXT")
         .ok()
+        .filter(|s| !s.is_empty())
         .or_else(|| cfg.default_context.clone())
 }
 
