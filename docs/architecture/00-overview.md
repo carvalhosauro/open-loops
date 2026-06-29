@@ -33,7 +33,7 @@ file, plus a build/CI/release doc. The crate root that wires them together is
 | 1 | Discovery | `scanner.rs`, `worktrees.rs` | [01-discovery.md](01-discovery.md) |
 | 2 | Sessions & attribution | `sessions/` | [02-sessions-attribution.md](02-sessions-attribution.md) |
 | 3 | Query engine | `query.rs` | [03-query-engine.md](03-query-engine.md) |
-| 4 | Inventory & evidence | `inventory.rs`, `output.rs` (render) | [04-inventory-evidence.md](04-inventory-evidence.md) |
+| 4 | Inventory & evidence | `inventory.rs` | [04-inventory-evidence.md](04-inventory-evidence.md) |
 | 5 | Resume & distill | `distill.rs` | [05-resume-distill.md](05-resume-distill.md) |
 | 6 | Cache & index | `cache.rs`, `index/` | [06-cache-index.md](06-cache-index.md) |
 | 7 | Config & state | `config.rs`, `state.rs`, `ignores.rs` | [07-config-state.md](07-config-state.md) |
@@ -89,8 +89,8 @@ written along the way.
 ```mermaid
 flowchart TD
     start([loops invocation]) --> parse["CLI: parse args + dispatch<br/>(cli.rs, cli_command.rs)"]
-    parse --> cfg[["Config &amp; state<br/>load roots, contexts,<br/>llm_command (config.rs,<br/>state.rs, ignores.rs)"]]
-    cfg --> query["Query engine: parse query<br/>into ScanPlan (query.rs)"]
+    parse <--> cfg[["Config &amp; state<br/>roots, contexts, llm_command<br/>(config.rs, state.rs, ignores.rs)"]]
+    parse --> query["Query engine: parse query<br/>into ScanPlan (query.rs)"]
     query --> discover["Discovery: scan repos +<br/>unmerged branches via git<br/>(scanner.rs, worktrees.rs)"]
 
     discover <--> stores[["Cache &amp; index<br/>SQLite index + inventory memo<br/>(index/, inventory.rs, cache.rs)"]]
@@ -115,8 +115,10 @@ flowchart TD
 In code: `main.rs` dispatches to `run_list` or `run_resume`
 ([`src/cli.rs:224`](../../src/cli.rs:224),
 [`src/cli.rs:292`](../../src/cli.rs:292)). Both first load config and resolve the
-query into a `ScanPlan` (`resolve_plan`,
-[`src/query.rs:225`](../../src/query.rs:225)), then scan
+query into a `ScanPlan` via `resolve_plan_persisting`
+([`src/cli.rs:63`](../../src/cli.rs:63)) — the runtime wrapper that persists any
+active-context switch and delegates to `query::resolve_plan`
+([`src/query.rs:225`](../../src/query.rs:225)) — then scan
 (`scanner::scan_indexed`, [`src/scanner.rs:733`](../../src/scanner.rs:733)),
 filter in memory (`ScanPlan::matches`,
 [`src/query.rs:346`](../../src/query.rs:346)), and either render the table
@@ -179,7 +181,8 @@ These hold system-wide; each domain doc restates the ones it owns.
   [`src/cli.rs:38`](../../src/cli.rs:38)).
 - **The cache invalidates itself on new work.** A resume context is keyed by the
   loop's HEAD sha, so a new commit produces a cache miss automatically
-  (`cache::Cache`, [`src/cache.rs:8`](../../src/cache.rs:8)).
+  (`Cache::get`/`Cache::put`, [`src/cache.rs:30`](../../src/cache.rs:30),
+  [`src/cache.rs:39`](../../src/cache.rs:39)).
 - **A resume is never silently trusted.** Every resume context ships a
   confidence score and a `## Sources` section — the audit trail you use to
   decide whether to trust the distillation, not debugging metadata.
@@ -242,6 +245,8 @@ Code (verified against the current tree):
   [`src/main.rs:28`](../../src/main.rs:28) — `OPEN_LOOPS_HOME` base-dir resolution.
 - [`src/cli.rs:224`](../../src/cli.rs:224) — `run_list`;
   [`src/cli.rs:292`](../../src/cli.rs:292) — `run_resume`;
+  [`src/cli.rs:63`](../../src/cli.rs:63) — `resolve_plan_persisting` (runtime wrapper
+  that delegates to `query::resolve_plan`);
   [`src/cli.rs:38`](../../src/cli.rs:38) — `load_cfg_with_roots` (shared preamble).
 - [`src/cli_command.rs:5`](../../src/cli_command.rs:5) — `Cli`/`Command` surface.
 - [`src/scanner.rs:109`](../../src/scanner.rs:109) — `OpenLoop` (the open-loop type);
@@ -252,8 +257,10 @@ Code (verified against the current tree):
   [`src/sessions/mod.rs:23`](../../src/sessions/mod.rs:23) — `SessionSource` trait.
 - [`src/distill.rs:13`](../../src/distill.rs:13) — `Confidence`;
   [`src/distill.rs:64`](../../src/distill.rs:64) — `build_prompt`.
+- [`src/output.rs:31`](../../src/output.rs:31) — `render_table` (inventory render).
 - [`src/index/mod.rs:50`](../../src/index/mod.rs:50) — `Index::open` (self-healing).
-- [`src/cache.rs:8`](../../src/cache.rs:8) — distillation `Cache`.
+- [`src/cache.rs:30`](../../src/cache.rs:30) — `Cache::get`;
+  [`src/cache.rs:39`](../../src/cache.rs:39) — `Cache::put` (distillation cache keyed by head-sha).
 
 Sibling architecture docs: [01-discovery](01-discovery.md) ·
 [02-sessions-attribution](02-sessions-attribution.md) ·
