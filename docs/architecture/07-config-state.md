@@ -151,7 +151,7 @@ defining declaration line.
 | `max_session_kb` | `u64` | `50` | field [`:33`](../../src/config.rs:33); `default_max_session_kb` [`:60`](../../src/config.rs:60) |
 | `scan_depth` | `usize` | `4` | field [`:36`](../../src/config.rs:36); `default_scan_depth` [`:64`](../../src/config.rs:64) |
 | `inventory_ttl_secs` | `u64` | `0` (SHA-only) | [`src/config.rs:40`](../../src/config.rs:40) |
-| `[contexts.X]` | `BTreeMap<String,ContextDef>` | `{}` | [`src/config.rs:43`](../../src/config.rs:43); `ContextDef.filter` [`:10`](../../src/config.rs:10) |
+| `[contexts.X]` | `BTreeMap<String,ContextDef>` | `{}` | [`src/config.rs:43`](../../src/config.rs:43); `ContextDef.filter` [`:11`](../../src/config.rs:11) |
 
 `Config` derives its full defaults via `impl Default`
 ([`src/config.rs:68`](../../src/config.rs:68)); `Store::load`
@@ -217,7 +217,7 @@ called.
   segment of the canonical loop key and must be unambiguous.
 - **State is separate from config, and the CLI never rewrites your config.** The
   active context lives in `state.toml`, not `config.toml`
-  ([`src/state.rs:1`](../../src/state.rs:1)), so `loops @work` persists a switch
+  ([`src/state.rs:13`](../../src/state.rs:13)), so `loops @work` persists a switch
   without touching the file you hand-edit. `set_current_context` short-circuits
   when the value is unchanged ([`src/state.rs:52`](../../src/state.rs:52)), so a
   no-op query performs no write.
