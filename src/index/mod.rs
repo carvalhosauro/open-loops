@@ -339,9 +339,11 @@ impl Index {
     /// Upserts a session's bounded tail text into the `sessions` table and the
     /// `sessions_fts` virtual table.
     ///
-    /// Reindexes ONLY when the stored `(path, mtime)` row differs from the
-    /// supplied values. Unchanged files are skipped (no I/O, no FTS write).
-    /// On any index error, prints a warning and continues.
+    /// Reindexes ONLY when the stored `(mtime, size)` for `path` differs from
+    /// the supplied values. Unchanged files are skipped (no I/O, no FTS write).
+    /// `size` is compared alongside `mtime` so a same-second append that grows
+    /// the file still forces a reindex (closes the same-second FTS staleness
+    /// window, I-2). On any index error, prints a warning and continues.
     pub fn upsert_session(&self, path: &Path, repo_path: &Path, mtime: i64, size: i64, text: &str) {
         if let Err(e) = self.upsert_session_inner(path, repo_path, mtime, size, text) {
             eprintln!("warning: index upsert_session failed: {e:#}");
@@ -359,25 +361,35 @@ impl Index {
         let path_str = path.to_string_lossy();
         let repo_str = repo_path.to_string_lossy();
 
-        // Check whether a row with the same (path, mtime) already exists.
+        // Check whether a row with the same (path, mtime, size) already exists.
         // Also retrieve the rowid so we can delete the old FTS entry by rowid.
-        let existing: Option<(i64, i64)> = match self.conn.query_row(
-            "SELECT rowid, mtime FROM sessions WHERE path = ?1",
+        // `size` is compared alongside `mtime` to close the same-second
+        // staleness window (I-2): a file appended to twice within one wall-clock
+        // second keeps the same whole-second mtime, so mtime alone would skip the
+        // reindex and serve a stale tail. Any change to size (or mtime) reindexes.
+        let existing: Option<(i64, i64, i64)> = match self.conn.query_row(
+            "SELECT rowid, mtime, size FROM sessions WHERE path = ?1",
             rusqlite::params![path_str.as_ref()],
-            |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)),
+            |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, i64>(1)?,
+                    row.get::<_, i64>(2)?,
+                ))
+            },
         ) {
-            Ok(pair) => Some(pair),
+            Ok(triple) => Some(triple),
             Err(rusqlite::Error::QueryReturnedNoRows) => None,
             Err(e) => return Err(e),
         };
 
-        if existing.map(|(_, m)| m) == Some(mtime) {
-            // Nothing changed — skip reindex.
+        if existing.map(|(_, m, s)| (m, s)) == Some((mtime, size)) {
+            // Neither mtime nor size changed — skip reindex.
             return Ok(());
         }
 
         // If a previous row exists, remove the old FTS entry by rowid.
-        if let Some((old_rowid, _)) = existing {
+        if let Some((old_rowid, _, _)) = existing {
             self.conn.execute(
                 "DELETE FROM sessions_fts WHERE rowid = ?1",
                 rusqlite::params![old_rowid],
@@ -461,7 +473,10 @@ impl Index {
     // -------------------------------------------------------------------------
 
     /// Deletes `repos` rows (and their dependent `loops` rows) whose repo is gone
-    /// from disk, mirroring `inventory::prune_orphans`.
+    /// from disk. This is **stricter** than `inventory::prune_orphans`, which
+    /// prunes on a single `repo_path` existence check (and also reclaims
+    /// unreadable files); here a row is removed only when BOTH the scanned `path`
+    /// AND the `common_dir` are gone.
     ///
     /// A repo is an orphan only when BOTH its scanned `path` and its `common_dir`
     /// no longer exist: a worktree directory may be removed while the shared bare
@@ -598,10 +613,15 @@ impl Index {
                     size        INTEGER NOT NULL
                 );
 
+                -- NOT a contentless table: contentless FTS5 (content='') rejects
+                -- `DELETE ... WHERE rowid = ?`, which the reindex path needs when a
+                -- session file changes (I-2 same-second size bump). Letting the
+                -- table own its `text` keeps row-level delete/replace working; the
+                -- per-row text is tiny (a bounded tail) so the storage cost is
+                -- negligible. `path` stays UNINDEXED (stored, not tokenized).
                 CREATE VIRTUAL TABLE sessions_fts USING fts5(
                     text,
-                    path UNINDEXED,
-                    content=''
+                    path UNINDEXED
                 );
 
                 PRAGMA user_version = 1;
@@ -1102,6 +1122,44 @@ mod tests {
         assert!(
             mentions.contains(&path.to_path_buf()),
             "FTS must find the session"
+        );
+    }
+
+    /// I-2: a same-second append that GROWS the file (mtime unchanged, size up)
+    /// must force a reindex so the newly written branch mention is findable via
+    /// the mention probe. Comparing only `(path, mtime)` would skip the reindex
+    /// and leave a stale tail — the identical same-second staleness window the
+    /// refs-fingerprint gate closed with nanoseconds.
+    #[test]
+    fn upsert_session_reindexes_on_same_second_size_change() {
+        let index = Index::open_in_memory();
+        let path = std::path::Path::new("/fake/hot-session.jsonl");
+        let repo = std::path::Path::new("/home/g/app");
+        let mtime: i64 = 1_700_000_000; // identical across both writes
+
+        // First write: a short tail that does NOT mention the new branch.
+        index.upsert_session(path, repo, mtime, 50, "[user] starting work");
+        assert!(
+            !index
+                .session_mentions(repo, "feat/just-written")
+                .contains(&path.to_path_buf()),
+            "branch is not mentioned yet"
+        );
+
+        // Same-second append grows the file and adds the branch mention.
+        index.upsert_session(
+            path,
+            repo,
+            mtime, // SAME second
+            200,   // size grew
+            "[user] starting work\n[assistant] pushing feat/just-written",
+        );
+
+        assert!(
+            index
+                .session_mentions(repo, "feat/just-written")
+                .contains(&path.to_path_buf()),
+            "size change in the same second must force reindex so the new mention is findable"
         );
     }
 }
