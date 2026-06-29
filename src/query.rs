@@ -119,9 +119,41 @@ pub fn parse(input: &str) -> Result<ScanPlan> {
     Ok(plan)
 }
 
-/// Options for [`resolve_plan`]. The caller resolves `LOOPS_CONTEXT` vs config precedence.
+/// Options for [`resolve_plan`].
 pub struct ResolveOptions<'a> {
-    pub default_context: Option<&'a str>,
+    /// Active context from `state.toml` — used when the query has no `@`.
+    pub current_context: Option<&'a str>,
+}
+
+/// Whether an explicit `@` token in the query should update persisted config.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ContextPersistence {
+    /// `@name` — save to `state.toml`.
+    Set(String),
+    /// `@none` / `@all` — clear `state.toml`.
+    Clear,
+    /// No `@` token — leave config unchanged.
+    Unchanged,
+}
+
+/// Parses `@` usage for config persistence (call after [`resolve_plan`] succeeds).
+pub fn context_persistence_from_query(input: &str) -> Result<ContextPersistence> {
+    let tokens: Vec<&str> = input.split_whitespace().collect();
+    let at_count = tokens.iter().filter(|t| t.starts_with('@')).count();
+    if at_count > 1 {
+        bail!("only one @context per query");
+    }
+    match tokens.iter().find(|t| t.starts_with('@')) {
+        None => Ok(ContextPersistence::Unchanged),
+        Some(tok) => {
+            let name = tok.strip_prefix('@').unwrap();
+            if name == "none" || name == "all" {
+                Ok(ContextPersistence::Clear)
+            } else {
+                Ok(ContextPersistence::Set(name.to_string()))
+            }
+        }
+    }
 }
 
 /// Merges two plans with AND semantics across filters and OR across flags.
@@ -186,7 +218,7 @@ pub fn resolve_plan(input: &str, cfg: &Config, opts: &ResolveOptions) -> Result<
     let mut plans = Vec::new();
 
     if !has_at {
-        if let Some(ctx) = opts.default_context {
+        if let Some(ctx) = opts.current_context {
             let filter = cfg.context_filter(ctx)?;
             validate_context_filter(ctx, filter)?;
             plans.push(parse(filter)?);
@@ -329,7 +361,6 @@ mod tests {
 
     fn test_cfg() -> Config {
         Config {
-            default_context: Some("work".into()),
             contexts: BTreeMap::from([
                 (
                     "work".into(),
@@ -432,10 +463,10 @@ mod tests {
     }
 
     #[test]
-    fn resolve_plan_applies_default_context() {
+    fn resolve_plan_applies_current_context() {
         let cfg = test_cfg();
         let opts = ResolveOptions {
-            default_context: cfg.default_context.as_deref(),
+            current_context: Some("work"),
         };
         let expected = parse("root:~/work api").unwrap();
         let got = resolve_plan("api", &cfg, &opts).unwrap();
@@ -443,10 +474,10 @@ mod tests {
     }
 
     #[test]
-    fn resolve_plan_explicit_context_replaces_default() {
+    fn resolve_plan_explicit_context_replaces_current() {
         let cfg = test_cfg();
         let opts = ResolveOptions {
-            default_context: cfg.default_context.as_deref(),
+            current_context: Some("work"),
         };
         let expected = parse("root:~/personal api").unwrap();
         let got = resolve_plan("@personal api", &cfg, &opts).unwrap();
@@ -454,10 +485,10 @@ mod tests {
     }
 
     #[test]
-    fn resolve_plan_none_clears_default() {
+    fn resolve_plan_none_clears_current() {
         let cfg = test_cfg();
         let opts = ResolveOptions {
-            default_context: cfg.default_context.as_deref(),
+            current_context: Some("work"),
         };
         let expected = parse("api").unwrap();
         let got = resolve_plan("@none api", &cfg, &opts).unwrap();
@@ -468,7 +499,7 @@ mod tests {
     fn resolve_plan_unknown_context_errors() {
         let cfg = test_cfg();
         let opts = ResolveOptions {
-            default_context: cfg.default_context.as_deref(),
+            current_context: Some("work"),
         };
         let err = resolve_plan("@missing", &cfg, &opts)
             .unwrap_err()
@@ -480,7 +511,7 @@ mod tests {
     fn resolve_plan_context_with_idle_filter() {
         let cfg = test_cfg();
         let opts = ResolveOptions {
-            default_context: None,
+            current_context: None,
         };
         let plan = resolve_plan("@recent-work", &cfg, &opts).unwrap();
         assert_eq!(plan.root_filters, vec!["~/work".to_string()]);
@@ -502,7 +533,7 @@ mod tests {
             ..Config::default()
         };
         let opts = ResolveOptions {
-            default_context: None,
+            current_context: None,
         };
         let err = resolve_plan("@bad", &cfg, &opts).unwrap_err().to_string();
         assert!(err.contains("cannot contain '@' or ':'"), "got: {err}");
@@ -512,7 +543,7 @@ mod tests {
     fn resolve_plan_rejects_two_context_tokens() {
         let cfg = test_cfg();
         let opts = ResolveOptions {
-            default_context: None,
+            current_context: None,
         };
         let err = resolve_plan("@work @personal", &cfg, &opts)
             .unwrap_err()
@@ -521,10 +552,38 @@ mod tests {
     }
 
     #[test]
+    fn context_persistence_from_explicit_context() {
+        assert_eq!(
+            context_persistence_from_query("@work api").unwrap(),
+            ContextPersistence::Set("work".into())
+        );
+    }
+
+    #[test]
+    fn context_persistence_none_clears() {
+        assert_eq!(
+            context_persistence_from_query("@none").unwrap(),
+            ContextPersistence::Clear
+        );
+        assert_eq!(
+            context_persistence_from_query("@all").unwrap(),
+            ContextPersistence::Clear
+        );
+    }
+
+    #[test]
+    fn context_persistence_unchanged_without_at() {
+        assert_eq!(
+            context_persistence_from_query("api idle:>7d").unwrap(),
+            ContextPersistence::Unchanged
+        );
+    }
+
+    #[test]
     fn resolve_plan_report_still_errors() {
         let cfg = test_cfg();
         let opts = ResolveOptions {
-            default_context: None,
+            current_context: None,
         };
         let err = resolve_plan(":hot", &cfg, &opts).unwrap_err().to_string();
         assert!(err.contains("report"), "got: {err}");

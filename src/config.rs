@@ -38,9 +38,6 @@ pub struct Config {
     /// match. 0 (default) means SHA-only validation with no time-based expiry.
     #[serde(default)]
     pub inventory_ttl_secs: u64,
-    /// Named context used when a query has no explicit `@context` token.
-    #[serde(default)]
-    pub default_context: Option<String>,
     /// Named query scopes (`@name` in queries) mapped to filter strings.
     #[serde(default)]
     pub contexts: BTreeMap<String, ContextDef>,
@@ -79,7 +76,6 @@ impl Default for Config {
             max_session_kb: default_max_session_kb(),
             scan_depth: default_scan_depth(),
             inventory_ttl_secs: 0,
-            default_context: None,
             contexts: BTreeMap::new(),
         }
     }
@@ -553,7 +549,6 @@ mod tests {
     fn config_contexts_default_empty() {
         let cfg = Config::default();
         assert!(cfg.contexts.is_empty());
-        assert_eq!(cfg.default_context, None);
     }
 
     #[test]
@@ -561,7 +556,6 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let store = Store::new(tmp.path().join("state"));
         let cfg = Config {
-            default_context: Some("work".into()),
             contexts: BTreeMap::from([(
                 "work".into(),
                 ContextDef {
@@ -572,7 +566,6 @@ mod tests {
         };
         store.save(&cfg).unwrap();
         let loaded = store.load().unwrap();
-        assert_eq!(loaded.default_context, Some("work".into()));
         assert_eq!(
             loaded.contexts.get("work"),
             Some(&ContextDef {

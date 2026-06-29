@@ -40,20 +40,20 @@ comparator, e.g. `idle:>7d`; units m/h/d/w), `ahead:`/`behind:` (`>`,`<`,`>=`,
 
 ### Contexts
 
-Named scopes via `@` tokens and config (`default_context`, `[contexts.X]`).
+Named scopes via `@` tokens. Definitions live in `config.toml` (`[contexts.X]`);
+the active context is persisted in `state.toml` when you pass `@name` on the CLI.
 A context is your daily universe — work vs personal — not the same as reports
 (`:` — coming in phase 5).
 
 ```bash
-loops @work              # explicit scope
-loops                     # uses default_context when set
-loops @none               # full universe, ignore default
+loops @work              # switch to work (saved in state.toml)
+loops                     # uses current context from state.toml
+loops @none               # clear state and show full universe
 loops @work api idle:>7d  # compose context + ad-hoc filters
 ```
 
-`@none` and `@all` clear the default context for one invocation. Explicit `@ctx`
-replaces `default_context`. Only one `@` token per query. See
-`docs/configuration.md` for config and `LOOPS_CONTEXT`.
+`@none` and `@all` clear `state.toml`. Only one `@` token per query. See
+`docs/configuration.md` for `[contexts.X]` setup.
 
 ## `loops refresh [query]` — reindex inventory
 

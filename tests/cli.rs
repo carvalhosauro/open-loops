@@ -2,6 +2,7 @@
 use assert_cmd::Command;
 use open_loops::config::{ContextDef, Store};
 use open_loops::sessions::claude_code::encode_project_path;
+use open_loops::state::State;
 use predicates::prelude::*;
 use std::path::Path;
 
@@ -1028,17 +1029,16 @@ fn refresh_rewrites_corrupt_inventory_for_in_scope_repo() {
         .expect("inventory must be valid JSON again after refresh");
 }
 
-/// Merges `default_context` and `[contexts.*]` into config (post-init).
+/// Merges `[contexts.*]` into config and optional `current_context` into state.toml.
 fn setup_contexts_config(
     home: &Path,
     work_root: &Path,
     personal_root: &Path,
-    default: &str,
+    current: Option<&str>,
     extra: &[(&str, &str)],
 ) {
     let store = Store::new(home.to_path_buf());
     let mut cfg = store.load().unwrap();
-    cfg.default_context = Some(default.to_string());
     cfg.contexts.insert(
         "work".into(),
         ContextDef {
@@ -1060,6 +1060,11 @@ fn setup_contexts_config(
         );
     }
     store.save(&cfg).unwrap();
+
+    if let Some(name) = current {
+        let mut state = State::load(home).unwrap();
+        state.set_current_context(Some(name.to_string())).unwrap();
+    }
 }
 
 /// Creates `work/` and `personal/` roots each holding one open-loop repo; returns keys.
@@ -1109,7 +1114,7 @@ fn context_default_scopes_roots() {
     let work_root = tmp.path().join("work");
     let personal_root = tmp.path().join("personal");
     let (work_key, personal_key) = init_two_root_fixture(tmp.path(), &home);
-    setup_contexts_config(&home, &work_root, &personal_root, "work", &[]);
+    setup_contexts_config(&home, &work_root, &personal_root, Some("work"), &[]);
 
     loops(&home)
         .assert()
@@ -1118,7 +1123,13 @@ fn context_default_scopes_roots() {
         .stdout(predicate::str::contains(&personal_key).not());
 
     loops(&home)
-        .env("LOOPS_CONTEXT", "personal")
+        .arg("@personal")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(&personal_key))
+        .stdout(predicate::str::contains(&work_key).not());
+
+    loops(&home)
         .assert()
         .success()
         .stdout(predicate::str::contains(&personal_key))
@@ -1130,6 +1141,9 @@ fn context_default_scopes_roots() {
         .success()
         .stdout(predicate::str::contains(&work_key))
         .stdout(predicate::str::contains(&personal_key));
+
+    let state = State::load(&home).unwrap();
+    assert_eq!(state.current_context(), None);
 }
 
 #[test]
@@ -1139,10 +1153,19 @@ fn context_explicit_overrides_default() {
     let work_root = tmp.path().join("work");
     let personal_root = tmp.path().join("personal");
     let (work_key, personal_key) = init_two_root_fixture(tmp.path(), &home);
-    setup_contexts_config(&home, &work_root, &personal_root, "work", &[]);
+    setup_contexts_config(&home, &work_root, &personal_root, Some("work"), &[]);
 
     loops(&home)
         .arg("@personal")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(&personal_key))
+        .stdout(predicate::str::contains(&work_key).not());
+
+    let state = State::load(&home).unwrap();
+    assert_eq!(state.current_context(), Some("personal"));
+
+    loops(&home)
         .assert()
         .success()
         .stdout(predicate::str::contains(&personal_key))
@@ -1189,7 +1212,7 @@ fn context_with_idle_filter() {
         &home,
         &work_root,
         &personal_root,
-        "work",
+        Some("work"),
         &[("recent", &recent_filter)],
     );
 
@@ -1208,7 +1231,7 @@ fn context_unknown_errors() {
     let work_root = tmp.path().join("work");
     let personal_root = tmp.path().join("personal");
     init_two_root_fixture(tmp.path(), &home);
-    setup_contexts_config(&home, &work_root, &personal_root, "work", &[]);
+    setup_contexts_config(&home, &work_root, &personal_root, Some("work"), &[]);
 
     loops(&home)
         .arg("@nope")
@@ -1224,7 +1247,7 @@ fn refresh_honours_context() {
     let work_root = tmp.path().join("work");
     let personal_root = tmp.path().join("personal");
     init_two_root_fixture(tmp.path(), &home);
-    setup_contexts_config(&home, &work_root, &personal_root, "work", &[]);
+    setup_contexts_config(&home, &work_root, &personal_root, Some("work"), &[]);
 
     loops(&home).assert().success();
 

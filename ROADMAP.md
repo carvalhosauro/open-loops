@@ -107,9 +107,8 @@ Depende de: **ADR fase 2** (push-down)
 
 - [x] parse de `@nome` resolve `[contexts.nome]` do config
 - [x] `[contexts.X] filter = "..."` no `config.toml`
-- [x] `@none` / `@all` limpam o context default
-- [x] `default_context` (config) + `LOOPS_CONTEXT` (env) — só valem sem `@` na query
-- [x] `@ctx` explícito substitui o `default_context`
+- [x] `@none` / `@all` limpam o contexto em `state.toml`
+- [x] contexto ativo em `state.toml`; `@ctx` na CLI grava e filtra
 - [x] remover erro "contexts not supported yet" do parser
 
 ### ⬜ ADR fase 5 — reports `:` + `+stale` + help  ·  [ADR 0003](docs/decisions/0003-query-engine.md)

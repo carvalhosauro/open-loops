@@ -8,6 +8,7 @@ use crate::distill::Confidence;
 use crate::ignores::Ignores;
 use crate::inventory::InventoryStore;
 use crate::scanner::{self, OpenLoop, ScanOptions};
+use crate::state::State;
 use crate::{cache, distill, output, sessions, worktrees};
 use anyhow::{bail, ensure, Result};
 use sessions::{SessionExcerpt, SessionSource};
@@ -30,11 +31,31 @@ fn progress(msg: &str) {
     eprintln!("{msg}");
 }
 
-fn effective_default_context(cfg: &crate::config::Config) -> Option<String> {
-    std::env::var("LOOPS_CONTEXT")
-        .ok()
-        .filter(|s| !s.is_empty())
-        .or_else(|| cfg.default_context.clone())
+fn resolve_plan_persisting(
+    base: &Path,
+    cfg: &crate::config::Config,
+    query: &str,
+) -> Result<crate::query::ScanPlan> {
+    let mut state = State::load(base)?;
+    let plan = crate::query::resolve_plan(
+        query,
+        cfg,
+        &crate::query::ResolveOptions {
+            current_context: state.current_context(),
+        },
+    )?;
+
+    match crate::query::context_persistence_from_query(query)? {
+        crate::query::ContextPersistence::Set(name) => {
+            state.set_current_context(Some(name))?;
+        }
+        crate::query::ContextPersistence::Clear => {
+            state.set_current_context(None)?;
+        }
+        crate::query::ContextPersistence::Unchanged => {}
+    }
+
+    Ok(plan)
 }
 
 /// Writes inventory updates produced by a scan to disk.
@@ -92,14 +113,7 @@ fn resolve_loop(base: &Path, query: &str, fresh: bool) -> Result<OpenLoop> {
         !cfg.roots.is_empty(),
         "no roots configured. Run: loops init <dir-with-your-repos>"
     );
-    let default = effective_default_context(&cfg);
-    let mut plan = crate::query::resolve_plan(
-        query,
-        &cfg,
-        &crate::query::ResolveOptions {
-            default_context: default.as_deref(),
-        },
-    )?;
+    let mut plan = resolve_plan_persisting(base, &cfg, query)?;
     plan.include_ignored = true; // resume can target an ignored loop by key
     let labels = cfg.resolve_labels()?;
     let roots = cfg.resolve_scan_roots(&plan)?;
@@ -182,14 +196,7 @@ pub fn run_list(base: &Path, query: &str, fresh: bool) -> Result<()> {
         !cfg.roots.is_empty(),
         "no roots configured. Run: loops init <dir-with-your-repos>"
     );
-    let default = effective_default_context(&cfg);
-    let mut plan = crate::query::resolve_plan(
-        query,
-        &cfg,
-        &crate::query::ResolveOptions {
-            default_context: default.as_deref(),
-        },
-    )?;
+    let mut plan = resolve_plan_persisting(base, &cfg, query)?;
     plan.need_ahead_behind = true; // table always renders AHEAD/BEHIND columns
     let labels = cfg.resolve_labels()?;
     let roots = cfg.resolve_scan_roots(&plan)?;
@@ -302,14 +309,7 @@ pub fn run_refresh(base: &Path, query: &str) -> Result<()> {
         !cfg.roots.is_empty(),
         "no roots configured. Run: loops init <dir-with-your-repos>"
     );
-    let default = effective_default_context(&cfg);
-    let plan = crate::query::resolve_plan(
-        query,
-        &cfg,
-        &crate::query::ResolveOptions {
-            default_context: default.as_deref(),
-        },
-    )?;
+    let plan = resolve_plan_persisting(base, &cfg, query)?;
     let labels = cfg.resolve_labels()?;
     let roots = cfg.resolve_scan_roots(&plan)?;
     progress("scanning git repositories…");
