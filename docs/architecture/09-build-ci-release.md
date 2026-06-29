@@ -59,7 +59,7 @@ These terms are canonical for this domain.
 - **test matrix** — the `test` job fanned out across
   `[ubuntu-latest, macos-latest, windows-latest]` with `fail-fast: false`, so one
   failing OS does not cancel the others
-  ([`.github/workflows/ci.yml:30`](../../.github/workflows/ci.yml:30)). `loops`
+  ([`.github/workflows/ci.yml:31`](../../.github/workflows/ci.yml:31)). `loops`
   shells out to git and walks the filesystem, so path separators, CRLF, and git
   behavior diverge per OS — the matrix is what makes those divergences visible.
 - **MSRV (minimum supported Rust version)** — `1.89`, pinned in three places that
