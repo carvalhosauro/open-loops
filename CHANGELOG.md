@@ -1,6 +1,9 @@
 # Changelog
 ## unreleased
 
+### Features
+- `@` context scopes: `[contexts.X]` in config, active context in `state.toml` (ADR 0003 phase 4)
+
 ## 1.3.0 - 2026-06-27
 
 ### Docs

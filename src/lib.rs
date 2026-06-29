@@ -11,6 +11,7 @@ pub mod output;
 pub mod query;
 pub mod scanner;
 pub mod sessions;
+pub mod state;
 #[cfg(test)]
 pub mod testutil;
 pub mod worktrees;

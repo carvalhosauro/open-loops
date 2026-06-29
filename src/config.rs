@@ -3,8 +3,13 @@
 //! so tests can inject a tempdir — nothing here reads environment variables.
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use std::path::{Path, PathBuf};
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ContextDef {
+    pub filter: String,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Config {
@@ -33,6 +38,9 @@ pub struct Config {
     /// match. 0 (default) means SHA-only validation with no time-based expiry.
     #[serde(default)]
     pub inventory_ttl_secs: u64,
+    /// Named query scopes (`@name` in queries) mapped to filter strings.
+    #[serde(default)]
+    pub contexts: BTreeMap<String, ContextDef>,
 }
 
 fn default_llm_command() -> String {
@@ -68,11 +76,24 @@ impl Default for Config {
             max_session_kb: default_max_session_kb(),
             scan_depth: default_scan_depth(),
             inventory_ttl_secs: 0,
+            contexts: BTreeMap::new(),
         }
     }
 }
 
 impl Config {
+    /// Returns the filter string for a named context.
+    pub fn context_filter(&self, name: &str) -> Result<&str> {
+        self.contexts
+            .get(name)
+            .map(|c| c.filter.as_str())
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "unknown context '@{name}'; define [contexts.{name}] in config.toml"
+                )
+            })
+    }
+
     /// Resolves a stable label per root (alias, else basename). Errors when two
     /// roots resolve to the same label and no alias disambiguates them.
     pub fn resolve_labels(&self) -> Result<Vec<(std::path::PathBuf, String)>> {
@@ -99,17 +120,34 @@ impl Config {
         Ok(out)
     }
 
-    /// Subset of configured roots matching `plan.root_filter`. Path values are
+    /// Subset of configured roots matching `plan.root_filters`. Path values are
     /// tilde-expanded and canonicalized, then matched as a prefix against roots
     /// (ADR 0003). Label/path substring match is a fallback for short aliases.
+    /// Multiple filters are ANDed (intersection).
     pub fn resolve_scan_roots(
         &self,
         plan: &crate::query::ScanPlan,
     ) -> Result<Vec<std::path::PathBuf>> {
-        let labels = self.resolve_labels()?;
-        let Some(filter) = &plan.root_filter else {
+        if plan.root_filters.is_empty() {
             return Ok(self.roots.clone());
-        };
+        }
+        let labels = self.resolve_labels()?;
+        let mut acc: Option<HashSet<PathBuf>> = None;
+        for filter in &plan.root_filters {
+            let subset = self.roots_matching_filter(filter, &labels)?;
+            acc = Some(match acc {
+                None => subset,
+                Some(prev) => prev.intersection(&subset).cloned().collect(),
+            });
+        }
+        Ok(acc.unwrap().into_iter().collect())
+    }
+
+    fn roots_matching_filter(
+        &self,
+        filter: &str,
+        labels: &[(PathBuf, String)],
+    ) -> Result<HashSet<PathBuf>> {
         let mut prefix = expand_tilde(filter);
         if prefix.exists() {
             if let Ok(canon) = std::fs::canonicalize(&prefix) {
@@ -118,9 +156,9 @@ impl Config {
         }
         let needle = filter.to_lowercase();
         Ok(labels
-            .into_iter()
+            .iter()
             .filter(|(root, label)| root_matches_filter(root, label, filter, &needle, &prefix))
-            .map(|(root, _)| root)
+            .map(|(root, _)| root.clone())
             .collect())
     }
 }
@@ -408,6 +446,55 @@ mod tests {
     }
 
     #[test]
+    fn resolve_scan_roots_intersection_empty_when_filters_disjoint() {
+        let tmp = tempfile::tempdir().unwrap();
+        let work = tmp.path().join("work");
+        let personal = tmp.path().join("personal");
+        std::fs::create_dir_all(&work).unwrap();
+        std::fs::create_dir_all(&personal).unwrap();
+        let mut cfg = Config {
+            roots: vec![work.clone(), personal.clone()],
+            ..Config::default()
+        };
+        cfg.aliases
+            .insert(work.to_string_lossy().into_owned(), "w".into());
+
+        let plan = crate::query::ScanPlan {
+            root_filters: vec!["w".into(), "personal".into()],
+            ..Default::default()
+        };
+        let matched = cfg.resolve_scan_roots(&plan).unwrap();
+        assert!(matched.is_empty());
+    }
+
+    #[test]
+    fn resolve_scan_roots_single_filter_matches_same_as_one_root_token() {
+        let tmp = tempfile::tempdir().unwrap();
+        let work = tmp.path().join("work");
+        let personal = tmp.path().join("personal");
+        std::fs::create_dir_all(&work).unwrap();
+        std::fs::create_dir_all(&personal).unwrap();
+        let mut cfg = Config {
+            roots: vec![work.clone(), personal.clone()],
+            ..Config::default()
+        };
+        cfg.aliases
+            .insert(work.to_string_lossy().into_owned(), "w".into());
+
+        let via_parse = cfg
+            .resolve_scan_roots(&crate::query::parse("root:w").unwrap())
+            .unwrap();
+        let via_vec = cfg
+            .resolve_scan_roots(&crate::query::ScanPlan {
+                root_filters: vec!["w".into()],
+                ..Default::default()
+            })
+            .unwrap();
+        assert_eq!(via_vec, via_parse);
+        assert_eq!(via_vec, vec![work]);
+    }
+
+    #[test]
     fn resolve_scan_roots_tilde_expands_to_prefix_match() {
         let home = dirs::home_dir().expect("home dir");
         let tmp = tempfile::tempdir().unwrap();
@@ -456,5 +543,56 @@ mod tests {
         let err = cfg.resolve_labels().unwrap_err().to_string();
         assert!(err.contains("share label"), "got: {err}");
         assert!(err.contains("alias"), "got: {err}");
+    }
+
+    #[test]
+    fn config_contexts_default_empty() {
+        let cfg = Config::default();
+        assert!(cfg.contexts.is_empty());
+    }
+
+    #[test]
+    fn config_contexts_roundtrip_from_toml() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = Store::new(tmp.path().join("state"));
+        let cfg = Config {
+            contexts: BTreeMap::from([(
+                "work".into(),
+                ContextDef {
+                    filter: "root:work".into(),
+                },
+            )]),
+            ..Config::default()
+        };
+        store.save(&cfg).unwrap();
+        let loaded = store.load().unwrap();
+        assert_eq!(
+            loaded.contexts.get("work"),
+            Some(&ContextDef {
+                filter: "root:work".into(),
+            })
+        );
+    }
+
+    #[test]
+    fn context_filter_returns_filter_for_known_context() {
+        let cfg = Config {
+            contexts: BTreeMap::from([(
+                "work".into(),
+                ContextDef {
+                    filter: "root:work".into(),
+                },
+            )]),
+            ..Config::default()
+        };
+        assert_eq!(cfg.context_filter("work").unwrap(), "root:work");
+    }
+
+    #[test]
+    fn context_filter_errors_for_unknown_context() {
+        let cfg = Config::default();
+        let err = cfg.context_filter("missing").unwrap_err().to_string();
+        assert!(err.contains("unknown context '@missing'"), "got: {err}");
+        assert!(err.contains("[contexts.missing]"), "got: {err}");
     }
 }

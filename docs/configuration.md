@@ -13,6 +13,34 @@ Override the base directory: `OPEN_LOOPS_HOME` environment variable.
 | `max_session_kb` | integer | `50` | KB read from the end of each session |
 | `aliases` | table | `{}` | Per-root label override, keyed by canonical root path (resolves key collisions) |
 | `inventory_ttl_secs` | integer | `0` | Seconds before a cached ahead/behind entry expires; `0` = SHA-only validation, no time-based expiry |
+| `[contexts.X]` | table | — | Saved scope; `filter` is a query string |
+
+## Contexts
+
+Define named scopes in `config.toml` so you do not repeat `root:` on every invocation:
+
+```toml
+[contexts.work]
+filter = "root:~/work"
+
+[contexts.personal]
+filter = "root:~/personal"
+
+[contexts.recent-work]
+filter = "root:~/work idle:<=30d"
+```
+
+Each `filter` is a full query fragment (`root:`, `repo:`, `idle:>7d`, bare terms,
+`+ignored`, etc.). Context filters cannot contain `@` or `:` (reports are phase 5).
+
+The **active** context lives in `state.toml` (not `config.toml`). It is set when
+you pass `@name` on the CLI and cleared with `@none` or `@all`:
+
+```bash
+loops @work          # switch to work and persist in state.toml
+loops                # uses current context from state.toml
+loops @none          # clear state and show full universe for this run
+```
 
 ## Repository discovery
 
@@ -101,7 +129,8 @@ own (safe to delete `~/.open-loops/cache/`).
 
 ```
 ~/.open-loops/
-├── config.toml        # this configuration
+├── config.toml        # declarative configuration (roots, context definitions)
+├── state.toml         # active @context (set via `loops @name`)
 ├── ignores.toml       # loops dismissed via `loops ignore`
 ├── cache/             # distillations per repo/branch@sha (safe to delete)
 └── inventory/         # ahead/behind memo per repo (safe to delete)
