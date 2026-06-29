@@ -7,11 +7,11 @@ Track fino das fases pendentes. Ordem = sequência de execução recomendada
 
 | Bloco | Documento |
 |---|---|
-| Query engine, contexts, reports, inventory | [ADR 0003 — query engine](docs/decisions/0003-query-engine.md) |
-| Descoberta bare + worktree | [Spec Fase A — scanner bare+worktree](docs/superpowers/specs/2026-06-25-scanner-bare-worktree-discovery.md) |
-| Atribuição de sessão por worktree | [Spec Fase B — worktree session attribution](docs/superpowers/specs/2026-06-25-worktree-session-attribution.md) |
-| CI hardening (WAVE 1) | [Spec CI hardening](docs/superpowers/specs/2026-06-25-ci-hardening-design.md) |
-| Release artefato + automação (WAVE 2/3) | [Spec release completeness](docs/superpowers/specs/2026-06-26-release-completeness-automation-design.md) |
+| Query engine, contexts, reports, inventory | [ADR 0003 — query engine](docs/architecture/03-query-engine.md) |
+| Descoberta bare + worktree | [Spec Fase A — scanner bare+worktree](docs/architecture/01-discovery.md) |
+| Atribuição de sessão por worktree | [Spec Fase B — worktree session attribution](docs/architecture/01-discovery.md) |
+| CI hardening (WAVE 1) | [Spec CI hardening](docs/architecture/09-build-ci-release.md) |
+| Release artefato + automação (WAVE 2/3) | [Spec release completeness](docs/architecture/09-build-ci-release.md) |
 | Maturidade da lib + saúde OSS (WAVE 4) | [Spec library maturity](docs/superpowers/specs/2026-06-26-library-maturity-oss-health-design.md) |
 
 ## Regras de ordenação (travadas)
@@ -19,7 +19,7 @@ Track fino das fases pendentes. Ordem = sequência de execução recomendada
 - **Spec Fase A antes do query engine avançado** — descoberta bare+worktree era pré-requisito
   do scan; concluída (✅).
 - **Spec Fase A antes da ADR fase 3** — o common-dir absoluto é a identidade do
-  hash do inventory ([ADR 0003 §161](docs/decisions/0003-query-engine.md), Spec A §8).
+  hash do inventory ([ADR 0003](docs/architecture/03-query-engine.md), Spec A §8).
 - **ADR fase 2 antes de 4 e 5** — contexts/reports precisam do push-down pra escopar.
 - **Spec Fase B depende da Fase A mergeada.**
 - **WAVE 1 (CI) antes de WAVE 2/3 (release)** — release-plz assume CI endurecido.
@@ -29,14 +29,14 @@ Track fino das fases pendentes. Ordem = sequência de execução recomendada
 
 ## Sequência — query engine
 
-### ✅ Fase 1a — parser de query → ScanPlan  ·  [ADR 0003](docs/decisions/0003-query-engine.md)
+### ✅ Fase 1a — parser de query → ScanPlan  ·  [ADR 0003](docs/architecture/03-query-engine.md)
 
 - [x] `query.rs`: parse de termos soltos, atributos (`repo`/`branch`/`key`/`root`/`idle`/`ahead`/`behind`), tags (`+ignored`/`-ignored`)
 - [x] comparadores (`>` `<` `>=` `<=`) + durações (m/h/d/w)
 - [x] `ScanPlan` + avaliação em memória (`matches`)
 - [x] contexts/reports/`+stale` reservados com erro acionável
 
-### ✅ Fase 1b — chave canônica de 3 segmentos  ·  [ADR 0003](docs/decisions/0003-query-engine.md)
+### ✅ Fase 1b — chave canônica de 3 segmentos  ·  [ADR 0003](docs/architecture/03-query-engine.md)
 
 - [x] `OpenLoop.root_label` + `key()` `root_label/repo/branch`
 - [x] `Cache::path` chaveado por `root_label`
@@ -45,7 +45,7 @@ Track fino das fases pendentes. Ordem = sequência de execução recomendada
 - [x] superfície clap `loops [query]`
 - [x] migração documentada (`docs/configuration.md`, CHANGELOG)
 
-### ✅ Spec Fase A — descoberta bare + worktree  ·  [Spec A](docs/superpowers/specs/2026-06-25-scanner-bare-worktree-discovery.md)
+### ✅ Spec Fase A — descoberta bare + worktree  ·  [Spec A](docs/architecture/01-discovery.md)
 
 Depende de: —
 
@@ -64,7 +64,7 @@ Depende de: —
 - [x] `just lint` + `just fmt` limpos; cobertura no gate
 - [x] CHANGELOG atualizado
 
-### ✅ Spec Fase B — atribuição de sessão por worktree  ·  [Spec B](docs/superpowers/specs/2026-06-25-worktree-session-attribution.md)
+### ✅ Spec Fase B — atribuição de sessão por worktree  ·  [Spec B](docs/architecture/01-discovery.md)
 
 Depende de: **Spec Fase A**
 
@@ -78,7 +78,7 @@ Depende de: **Spec Fase A**
 - [x] `just lint` + `just fmt`; cobertura no gate
 - [x] CHANGELOG atualizado
 
-### ✅ ADR fase 2 — push-down + split fase leve/pesada  ·  [ADR 0003](docs/decisions/0003-query-engine.md)
+### ✅ ADR fase 2 — push-down + split fase leve/pesada  ·  [ADR 0003](docs/architecture/03-query-engine.md)
 
 Depende de: **Spec Fase A** (scan que acha repos + `repo_name` final). `@` contexts ficam na fase 4.
 
@@ -89,7 +89,7 @@ Depende de: **Spec Fase A** (scan que acha repos + `repo_name` final). `@` conte
 - [x] `need_ahead_behind` = renderiza colunas AHEAD/BEHIND **ou** query tem attr `ahead`/`behind`
 - [x] `ahead`/`behind` ficam `None` quando a fase pesada não roda; `render_table` imprime `-`
 
-### ✅ ADR fase 3 — inventory cache + refresh  ·  [ADR 0003](docs/decisions/0003-query-engine.md)
+### ✅ ADR fase 3 — inventory cache + refresh  ·  [ADR 0003](docs/architecture/03-query-engine.md)
 
 Depende de: **Spec Fase A** (common-dir = identidade do hash), **ADR fase 2**
 
@@ -99,9 +99,9 @@ Depende de: **Spec Fase A** (common-dir = identidade do hash), **ADR fase 2**
 - [x] escrita atômica (tmp + rename)
 - [x] `--fresh` ignora o memo; `loops refresh [query]` full reindex
 - [x] `inventory_ttl_secs` no config (default 0 = só validação por SHA)
-- [x] limpeza preguiçosa de órfãos no `refresh` ([ADR 0004](docs/decisions/0004-fase2-evidence-snapshot.md))
+- [x] limpeza preguiçosa de órfãos no `refresh` ([ADR 0004](docs/architecture/04-inventory-evidence.md))
 
-### ✅ ADR fase 4 — contexts `@`  ·  [ADR 0003](docs/decisions/0003-query-engine.md)
+### ✅ ADR fase 4 — contexts `@`  ·  [ADR 0003](docs/architecture/03-query-engine.md)
 
 Depende de: **ADR fase 2** (push-down)
 
@@ -111,7 +111,7 @@ Depende de: **ADR fase 2** (push-down)
 - [x] contexto ativo em `state.toml`; `@ctx` na CLI grava e filtra
 - [x] remover erro "contexts not supported yet" do parser
 
-### ✅ SQLite index — cache descartável de scan + sessões  ·  [ADR 0008](docs/decisions/0008-sqlite-index.md)
+### ✅ SQLite index — cache descartável de scan + sessões  ·  [ADR 0008](docs/architecture/06-cache-index.md)
 
 Depende de: **Spec Fase A** (common-dir = identidade), **ADR fase 3** (inventory).
 git permanece fonte da verdade; o índice é descartável e auto-recuperável.
@@ -128,7 +128,7 @@ git permanece fonte da verdade; o índice é descartável e auto-recuperável.
 - [x] ADR 0008; `features.md` + `configuration.md` + CHANGELOG atualizados
 - [ ] #16 (estratégia de fan-out de threads) e #31 (coluna de path no `loops`) seguem fora de escopo
 
-### ⬜ ADR fase 5 — reports `:` + `+stale` + help  ·  [ADR 0003](docs/decisions/0003-query-engine.md)
+### ⬜ ADR fase 5 — reports `:` + `+stale` + help  ·  [ADR 0003](docs/architecture/03-query-engine.md)
 
 Depende de: **ADR fase 2**, **ADR fase 4**
 
@@ -138,7 +138,7 @@ Depende de: **ADR fase 2**, **ADR fase 4**
 - [ ] `loops help query`
 - [ ] remover erros "not supported yet" (`:report` e `+stale`)
 
-### ⬜ ADR fase 6 — filtro em `worktrees [query]`  ·  [ADR 0003](docs/decisions/0003-query-engine.md)
+### ⬜ ADR fase 6 — filtro em `worktrees [query]`  ·  [ADR 0003](docs/architecture/03-query-engine.md)
 
 Depende de: **Spec Fase A**, **ADR fase 2** (camada de filtro), reuso da coleta `--porcelain` (Spec Fase B)
 
@@ -150,7 +150,7 @@ Depende de: **Spec Fase A**, **ADR fase 2** (camada de filtro), reuso da coleta 
 
 Trilha paralela ao query engine. Ordem entre waves travada em §Regras de ordenação.
 
-### ✅ WAVE 1 — CI hardening  ·  [Spec](docs/superpowers/specs/2026-06-25-ci-hardening-design.md)
+### ✅ WAVE 1 — CI hardening  ·  [Spec](docs/architecture/09-build-ci-release.md)
 
 Depende de: —
 
@@ -165,7 +165,7 @@ Depende de: —
 - [x] README badges (CI, crates.io, MSRV, license)
 - [x] ADR `0006-ci-msrv-cross-os.md`
 
-### ✅ WAVE 2/3 — artefato de release + automação  ·  [Spec](docs/superpowers/specs/2026-06-26-release-completeness-automation-design.md)
+### ✅ WAVE 2/3 — artefato de release + automação  ·  [Spec](docs/architecture/09-build-ci-release.md)
 
 Depende de: **WAVE 1**
 

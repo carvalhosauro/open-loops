@@ -1,5 +1,5 @@
 //! open-loops: recupera contexto de trabalhos pausados.
-//! Spec: docs/superpowers/specs/2026-06-10-open-loops-mvp-design.md
+//! Architecture: docs/architecture/ (start at 00-overview.md)
 
 pub mod cache;
 pub mod cli;

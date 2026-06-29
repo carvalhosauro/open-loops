@@ -4,10 +4,10 @@
 - **Status:** rascunho — derivado de brainstorm; aguardando revisão do autor
 - **Produto:** API pública da lib, testes, observabilidade, arquivos de comunidade
 - **Depende de:**
-  - `2026-06-25-ci-hardening-design.md` (WAVE 1) — matriz cross-OS, `--locked`,
+  - `docs/architecture/09-build-ci-release.md` (WAVE 1, ex-ci-hardening-design) — matriz cross-OS, `--locked`,
     cargo-deny; erros tipados e proptest são desenhados para falhar cedo nessa
     matriz, não só no E2E.
-  - `2026-06-26-release-completeness-automation-design.md` (WAVE 2/3) —
+  - `docs/architecture/09-build-ci-release.md` (WAVE 2/3, ex-release-completeness-automation-design) —
     release-plz landado; badge crates.io assume versão publicada automaticamente.
 
 > **Regra dura:** migração de erros (§4.1) **termina** antes de considerar WAVE 4
@@ -278,9 +278,10 @@ Settings → Community Standards passa a verde nos três itens.
 
 ### No mapa (registro da decisão)
 
-- **ADR `docs/decisions/0009-typed-errors-tracing.md`** — **novo**, EN. Registra:
-  (a) lib expõe `thiserror`, binário usa `anyhow`; (b) motivação testes + CI cross-OS;
-  (c) `tracing` com `--verbose`/`RUST_LOG`. Liga a este spec.
+- **Decisão typed-errors + tracing** — **nova**, EN. A registrar na seção *Decisions*
+  da camada `docs/architecture/` (o sistema ADR em `docs/decisions/` foi consolidado
+  nessa camada). Registra: (a) lib expõe `thiserror`, binário usa `anyhow`;
+  (b) motivação testes + CI cross-OS; (c) `tracing` com `--verbose`/`RUST_LOG`. Liga a este spec.
 
 ---
 
