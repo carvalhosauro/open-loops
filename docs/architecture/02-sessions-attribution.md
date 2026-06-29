@@ -127,8 +127,8 @@ flowchart TD
     keep -->|no| dropf["drop candidate"]
     keep -->|yes| cand["candidate"]
 
-    cand --> sort["stable sort:<br/>mentions DESC, in_window DESC,<br/>modified DESC, path ASC"]
-    sort --> parse["read bounded tail; per line:<br/>extract_text (TOLERANT)"]
+    cand --> sort["stable sort ONCE over all candidates:<br/>mentions DESC, in_window DESC,<br/>modified DESC, path ASC"]
+    sort --> parse["next candidate (pre-sorted): read bounded tail;<br/>per line: extract_text (TOLERANT)"]
     parse --> badline{line parses to a<br/>user/assistant message?}
     badline -->|no: corrupt / non-message / empty| skipline["skip line, keep parsing"]
     badline -->|yes| collect["collect '[role] text'"]
@@ -138,7 +138,8 @@ flowchart TD
     emptytext -->|yes| dropsession["skip session<br/>(does NOT consume a slot)"]
     emptytext -->|no| excerpt["SessionExcerpt:<br/>source, modified, text,<br/>in_window, mentions_branch"]
     excerpt --> cap{reached max_sessions?}
-    cap -->|no| sort
+    dropsession --> parse
+    cap -->|no| parse
     cap -->|yes| out([excerpts -> evidence / distill])
     empty --> out
 ```
@@ -226,7 +227,7 @@ Method parameters (shared by `excerpts` and `excerpts_indexed`):
 | `repo_path` | `OpenLoop.repo_path` (worktree when checked out, else container). |
 | `branch` | `OpenLoop.branch`. |
 | `window` | `scanner::commit_window` ([`src/scanner.rs:984`](../../src/scanner.rs:984)). |
-| `max_sessions`, `max_kb` | Config `max_sessions` / `max_session_kb` ([`src/config.rs:28`](../../src/config.rs:28)). |
+| `max_sessions`, `max_kb` | Config `max_sessions` / `max_session_kb` ([`src/config.rs:30`](../../src/config.rs:30)). |
 
 `excerpts_indexed` takes one extra parameter, `index: Option<&Index>`: `None`
 selects the in-memory mention probe; `Some` uses the FTS index but still reads
@@ -394,7 +395,7 @@ Code (verified against the current tree):
   the deterministic relevance sort;
   [`src/sessions/claude_code.rs:195`](../../src/sessions/claude_code.rs:195) —
   empty-text skip before the `max_sessions` cap;
-  [`src/sessions/claude_code.rs:225`](../../src/sessions/claude_code.rs:225) —
+  [`src/sessions/claude_code.rs:217`](../../src/sessions/claude_code.rs:217) —
   `impl SessionSource for ClaudeCode` (delegates to `excerpts_indexed` with no
   index).
 - [`src/scanner.rs:109`](../../src/scanner.rs:109) — `OpenLoop` (carries
@@ -412,7 +413,8 @@ Code (verified against the current tree):
 - [`src/cli.rs:204`](../../src/cli.rs:204) — `excerpts_indexed` call in the
   resume evidence step.
 - [`src/config.rs:50`](../../src/config.rs:50) — `default_sessions_dir`;
-  [`src/config.rs:28`](../../src/config.rs:28) — `max_sessions` / `max_session_kb`.
+  [`src/config.rs:30`](../../src/config.rs:30) — `max_sessions` (`max_session_kb`
+  at [`src/config.rs:33`](../../src/config.rs:33)).
 
 Tests worth reading (all in [`src/sessions/claude_code.rs`](../../src/sessions/claude_code.rs:237)):
 `extract_text_captures_user_assistant_and_ignores_rest`,
