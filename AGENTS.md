@@ -1,6 +1,6 @@
 # open-loops — mapa para agentes
 
-CLI Rust. Binário: `loops`. Spec: `docs/superpowers/specs/2026-06-10-open-loops-mvp-design.md`.
+CLI Rust. Binário: `loops`. Architecture: `docs/architecture/` (start at `00-overview.md`).
 
 ## Comandos de desenvolvimento
 
@@ -46,7 +46,7 @@ just changelog   # local preview only (git-cliff); release changelog is updated 
 
 Secrets (one-time): `RELEASE_PLZ_TOKEN` (PAT: Contents + PR write), `CARGO_REGISTRY_TOKEN`,
 `HOMEBREW_TAP_TOKEN`. Tap repo: `carvalhosauro/homebrew-tap`. Checklist:
-`docs/distribution.md`. ADR: `docs/decisions/0007-release-plz-cargo-dist-split.md`.
+`docs/distribution.md`. ADR: `docs/architecture/09-build-ci-release.md`.
 
 ## Cursor Cloud specific instructions
 
