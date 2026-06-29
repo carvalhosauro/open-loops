@@ -147,8 +147,11 @@ before, then written through to the index on the calling thread.
 keeps the write-through — so the scoped repos' `repos`/`loops` rows are rebuilt on
 that scan. After writing, `refresh` calls `Index::prune_missing_repos()`, which
 deletes `repos` rows (and their dependent `loops`) whose scanned `path` **and**
-`common_dir` are both gone from disk — the same orphan semantics as
-`inventory::prune_orphans`. A worktree dir removed while its shared bare store
+`common_dir` are both gone from disk — **stricter** than
+`inventory::prune_orphans`, which prunes on a single `repo_path` check (and also
+reclaims unreadable files); the index requires BOTH the path AND the common_dir
+to be gone, so a worktree-vs-bare-store split never drops a still-live repo. A
+worktree dir removed while its shared bare store
 survives is **not** an orphan (its branches are still real), so the row is kept.
 Removal is self-healing: a returning repo is simply re-indexed on the next scan.
 
