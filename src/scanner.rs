@@ -164,8 +164,9 @@ pub fn git_common_dir(path: &Path) -> Result<PathBuf> {
 }
 
 /// Cheap fingerprint of a repo's refs: the MAX mtime (unix nanoseconds since the
-/// epoch) of `<common_dir>/HEAD`, `<common_dir>/packed-refs` (when present), and
-/// the newest entry anywhere under the `<common_dir>/refs` tree. Missing files
+/// epoch) of `<common_dir>/HEAD`, `<common_dir>/packed-refs` (when present), the
+/// newest entry anywhere under the `<common_dir>/refs` tree, and the newest entry
+/// anywhere under the `<common_dir>/worktrees/` tree. Missing files or directories
 /// contribute 0.
 ///
 /// This is the refs-fingerprint gate (#13): when it is unchanged since the last
@@ -188,11 +189,15 @@ pub fn git_common_dir(path: &Path) -> Result<PathBuf> {
 /// - `git gc`/repacking rewrites `packed-refs`, which bumps the fingerprint
 ///   without a semantic change. That is acceptable — it only forces one
 ///   recompute, never stale data.
+/// - `git worktree add`/`remove` mutates `<common_dir>/worktrees/`, which is now
+///   covered: any worktree change bumps the fingerprint → gate invalidates →
+///   recompute → fresh `worktree_path` values are served.
 pub fn refs_fingerprint(common_dir: &Path) -> i64 {
     let mut max = 0_i64;
     max = max.max(file_mtime_nanos(&common_dir.join("HEAD")));
     max = max.max(file_mtime_nanos(&common_dir.join("packed-refs")));
     max = max.max(newest_mtime_in_tree(&common_dir.join("refs")));
+    max = max.max(newest_mtime_in_tree(&common_dir.join("worktrees")));
     max
 }
 
@@ -1860,6 +1865,50 @@ bare
         assert_eq!(loops.len(), 1);
         assert_eq!(loops[0].branch, "feat/api");
         assert_eq!(loops[0].ahead, Some(1));
+    }
+
+    /// Adding a worktree for an ALREADY-EXISTING branch (so no new loose ref is
+    /// written under `refs/`) must still bump the fingerprint, because
+    /// `<common_dir>/worktrees/<name>/` is created. This guards against
+    /// `git worktree remove` leaving a stale `worktree_path` in the index that
+    /// points at a deleted directory.
+    ///
+    /// We assert on ADD (not remove) because creating a new directory entry
+    /// reliably bumps the parent dir mtime even on coarse filesystems, whereas
+    /// remove leaves a gap the OS may or may not fill before the next read.
+    #[test]
+    fn adding_worktree_for_existing_branch_bumps_fingerprint() {
+        let tmp = tempfile::tempdir().unwrap();
+        let container = tmp.path().join("proj");
+        // init_bare_worktree_container gives us: .bare/ (common_dir), a `main`
+        // worktree, and one commit — a branch ref already exists.
+        testutil::init_bare_worktree_container(&container);
+
+        let common = git_common_dir(&container).unwrap();
+        let fp_before = refs_fingerprint(&common);
+
+        // Add a worktree for the existing `main` branch ref reusing `-b` on a
+        // fresh name so no new ref is created (we just add a worktrees/<name>/ entry).
+        // `add_named_worktree` uses `git worktree add -b <branch> <path>`, which
+        // creates a brand-new branch. To avoid creating a new ref we use
+        // `git worktree add --detach` on an existing commit instead.
+        let wt_path = container.join("extra");
+        testutil::git(
+            &container,
+            &[
+                "worktree",
+                "add",
+                "--detach",
+                wt_path.to_str().unwrap(),
+                "HEAD",
+            ],
+        );
+
+        let fp_after = refs_fingerprint(&common);
+        assert!(
+            fp_after > fp_before,
+            "fingerprint must increase after git worktree add (before={fp_before}, after={fp_after})"
+        );
     }
 
     /// End-to-end through `scan_indexed`: a warm scan with an index serves the
