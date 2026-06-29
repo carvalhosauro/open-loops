@@ -163,6 +163,72 @@ pub fn git_common_dir(path: &Path) -> Result<PathBuf> {
     Ok(PathBuf::from(raw))
 }
 
+/// Cheap fingerprint of a repo's refs: the MAX mtime (unix nanoseconds since the
+/// epoch) of `<common_dir>/HEAD`, `<common_dir>/packed-refs` (when present), and
+/// the newest entry anywhere under the `<common_dir>/refs` tree. Missing files
+/// contribute 0.
+///
+/// This is the refs-fingerprint gate (#13): when it is unchanged since the last
+/// index write, the cached loops are still valid and the heavy git phase
+/// (`for-each-ref`, `branch --merged`, per-branch `rev-list`) can be skipped
+/// entirely.
+///
+/// Precision note: the brief specified whole-second mtimes, but a branch created
+/// (or advanced) within the same wall-clock second as the previous index write
+/// would then leave the fingerprint unchanged and silently serve stale loops —
+/// e.g. a brand-new branch would not appear. Using nanosecond precision closes
+/// that window so a new/advanced ref is always detected, regardless of timing.
+/// `i64` nanos-since-epoch overflow only in the year 2262, so the range is safe.
+/// On filesystems that expose only second-granularity mtimes the sub-second part
+/// is simply 0 — the gate then degrades to whole-second behaviour, never worse.
+///
+/// Other notes:
+/// - the gate is additionally paired with `default_sha` in `cached_loops`, so a
+///   moved default branch invalidates even if mtimes somehow collide.
+/// - `git gc`/repacking rewrites `packed-refs`, which bumps the fingerprint
+///   without a semantic change. That is acceptable — it only forces one
+///   recompute, never stale data.
+pub fn refs_fingerprint(common_dir: &Path) -> i64 {
+    let mut max = 0_i64;
+    max = max.max(file_mtime_nanos(&common_dir.join("HEAD")));
+    max = max.max(file_mtime_nanos(&common_dir.join("packed-refs")));
+    max = max.max(newest_mtime_in_tree(&common_dir.join("refs")));
+    max
+}
+
+/// Unix mtime of a single path in nanoseconds since the epoch, or 0 when it is
+/// missing / unreadable. Saturates at `i64::MAX` (year 2262) rather than wrap.
+fn file_mtime_nanos(path: &Path) -> i64 {
+    std::fs::metadata(path)
+        .and_then(|m| m.modified())
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| i64::try_from(d.as_nanos()).unwrap_or(i64::MAX))
+        .unwrap_or(0)
+}
+
+/// Newest mtime (unix nanos) found by walking `dir` recursively (files and the
+/// directories themselves). Returns 0 for a missing/unreadable tree.
+///
+/// Loose refs live as files under `refs/`; a brand-new branch creates a new file
+/// (and bumps the containing directory's mtime), and advancing a branch rewrites
+/// its ref file — both raise this value, which is exactly the signal the gate
+/// wants. Packed refs are covered separately via `packed-refs`.
+fn newest_mtime_in_tree(dir: &Path) -> i64 {
+    let mut max = file_mtime_nanos(dir);
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return max;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        match entry.file_type() {
+            Ok(ft) if ft.is_dir() => max = max.max(newest_mtime_in_tree(&path)),
+            _ => max = max.max(file_mtime_nanos(&path)),
+        }
+    }
+    max
+}
+
 // PERF-1: git_common_dir is called twice per repo — once in dedup_candidates
 // (computed but not stored), and again in open_loops. Reusing the value from
 // dedup would require changing RepoCandidate or open_loops's public signature.
@@ -355,11 +421,74 @@ pub fn open_loops(
     root_label: &str,
     opts: &ScanOptions,
 ) -> Result<(Vec<OpenLoop>, Option<InvUpdate>)> {
+    open_loops_indexed(repo, root_label, opts, None)
+}
+
+/// Like [`open_loops`] but optionally consults a SQLite `index` for the
+/// refs-fingerprint gate (#13).
+///
+/// When `index` is `Some` and `opts.fresh` is false, the gate is checked first:
+/// if the repo's `refs_fingerprint` and `default_sha` are unchanged since the
+/// last index write, the cached loops are returned and the heavy git phase
+/// (`for-each-ref`, `branch --merged`, per-branch `rev-list`) is skipped
+/// entirely. On a miss (or `opts.fresh`), the full logic runs and the result is
+/// written through to the index for the next call.
+///
+/// When `index` is `None`, the behaviour is byte-for-byte identical to the
+/// pre-index code path.
+///
+/// Index errors never abort a scan: git is the source of truth and the index is
+/// disposable, so a degraded index simply forces a recompute.
+///
+/// # Errors
+///
+/// Returns `Err` if git fails or if the default branch is not found.
+pub fn open_loops_indexed(
+    repo: &Path,
+    root_label: &str,
+    opts: &ScanOptions,
+    index: Option<&Index>,
+) -> Result<(Vec<OpenLoop>, Option<InvUpdate>)> {
     // Resolve default branch and its SHA once (PERF-2: avoid duplicate rev-parse).
     let (default, default_sha) = default_branch_and_sha(repo)?;
 
     let common_dir = git_common_dir(repo)?;
     let repo_name = repo_name_from_common_dir(&common_dir);
+
+    // -- Refs-fingerprint gate (#13) ---------------------------------------
+    // Compute the fingerprint once; reused for both the read gate and the
+    // write-through below.
+    let refs_fp = refs_fingerprint(&common_dir);
+    let gate_hash = inventory::common_dir_hash(&common_dir);
+
+    if let Some(idx) = index {
+        if !opts.fresh {
+            if let Some(rows) = idx.cached_loops(&gate_hash, refs_fp, &default_sha) {
+                // A hit must serve what the caller needs: if ahead/behind were
+                // requested but the cached rows lack them, treat as a miss and
+                // recompute (never hand back None to a caller that asked).
+                let serves = !opts.need_ahead_behind || rows.iter().all(|r| r.ahead.is_some());
+                if serves {
+                    let loops = rows
+                        .into_iter()
+                        .map(|r| OpenLoop {
+                            root_label: root_label.to_string(),
+                            repo_name: repo_name.clone(),
+                            repo_path: r.worktree_path,
+                            branch: r.branch,
+                            head_sha: r.head_sha,
+                            last_commit: r.last_commit,
+                            ahead: r.ahead,
+                            behind: r.behind,
+                        })
+                        .collect();
+                    // Cache hit returns no inventory update: the heavy phase did
+                    // not run, so there is nothing new to memoise.
+                    return Ok((loops, None));
+                }
+            }
+        }
+    }
     let worktrees = worktree_map(repo).unwrap_or_else(|e| {
         eprintln!(
             "warning: git worktree list failed in {}: {e:#}; session matching falls back to the repo path",
@@ -506,6 +635,34 @@ pub fn open_loops(
         None
     };
 
+    // -- Write-through to the index (#13) ----------------------------------
+    // A miss (or `--fresh`) just recomputed everything: persist it so the next
+    // unchanged-refs scan hits the gate and skips the heavy git phase. Index
+    // errors are swallowed inside `put_loops` (git is the source of truth).
+    if let Some(idx) = index {
+        let rows: Vec<crate::index::LoopRow> = result
+            .iter()
+            .map(|l| crate::index::LoopRow {
+                branch: l.branch.clone(),
+                head_sha: l.head_sha.clone(),
+                base_sha: default_sha.clone(),
+                ahead: l.ahead,
+                behind: l.behind,
+                last_commit: l.last_commit,
+                worktree_path: l.repo_path.clone(),
+            })
+            .collect();
+        idx.put_loops(
+            &gate_hash,
+            repo,
+            &common_dir,
+            &default,
+            &default_sha,
+            refs_fp,
+            &rows,
+        );
+    }
+
     Ok((result, inventory_update))
 }
 
@@ -524,13 +681,58 @@ pub fn scan(
     opts: &ScanOptions,
     repo_filter: Option<&str>,
 ) -> (Vec<OpenLoop>, Vec<String>, Vec<InvUpdate>) {
-    let (mut repos, mut warnings) = find_repos(roots, scan_depth);
+    scan_indexed(roots, labels, scan_depth, opts, repo_filter, None)
+}
+
+/// Like [`scan`] but optionally consults a SQLite `index` for the
+/// refs-fingerprint gate (#13) and to cache `--git-common-dir` during repo
+/// discovery.
+///
+/// `rusqlite::Connection` is `Send` but `!Sync`, so a single `&Index` cannot be
+/// shared across the parallel scan threads. The gate is therefore evaluated
+/// **sequentially on the calling thread** (a gate hit is cheap — a handful of
+/// `stat`s plus one SQLite read — so warm scans stay fast), while every repo
+/// that misses the gate is recomputed **in parallel** exactly as before, with
+/// its fresh result written through to the index afterwards on the calling
+/// thread. The `None` path is byte-for-byte identical to the pre-index `scan`.
+pub fn scan_indexed(
+    roots: &[PathBuf],
+    labels: &[(PathBuf, String)],
+    scan_depth: usize,
+    opts: &ScanOptions,
+    repo_filter: Option<&str>,
+    index: Option<&Index>,
+) -> (Vec<OpenLoop>, Vec<String>, Vec<InvUpdate>) {
+    let (mut repos, mut warnings) = find_repos_cached(roots, scan_depth, index);
     if let Some(filter) = repo_filter {
         let needle = filter.to_lowercase();
         repos.retain(|r| r.repo_name.to_lowercase().contains(&needle));
     }
+
+    let mut all = Vec::new();
+    let mut inventory_updates = Vec::new();
+
+    // Phase 1 (only with an index): try the gate sequentially on this thread.
+    // Repos that miss are deferred to the parallel recompute below.
+    let misses: Vec<&RepoCandidate> = if let Some(idx) = index {
+        let mut misses = Vec::new();
+        for repo in &repos {
+            let label = crate::config::label_for_repo(labels, &repo.path);
+            match try_gate(&repo.path, &label, opts, idx) {
+                Some(Ok((mut loops, _))) => all.append(&mut loops),
+                Some(Err(e)) => warnings.push(format!("{}: {e:#}", repo.path.display())),
+                None => misses.push(repo),
+            }
+        }
+        misses
+    } else {
+        repos.iter().collect()
+    };
+
+    // Phase 2: recompute the misses (and the entire `None` path) in parallel,
+    // without the index (it is `!Sync`). Write-through happens afterwards.
     let results: Vec<Result<(Vec<OpenLoop>, Option<InvUpdate>)>> = std::thread::scope(|s| {
-        let handles: Vec<_> = repos
+        let handles: Vec<_> = misses
             .iter()
             .map(|repo| {
                 let label = crate::config::label_for_repo(labels, &repo.path);
@@ -546,12 +748,16 @@ pub fn scan(
             })
             .collect()
     });
-    let mut all = Vec::new();
-    let mut inventory_updates = Vec::new();
-    for (repo, res) in repos.iter().zip(results) {
+
+    for (repo, res) in misses.iter().zip(results) {
         match res {
-            Ok((mut loops, inv)) => {
-                all.append(&mut loops);
+            Ok((loops, inv)) => {
+                // Write the freshly computed loops through to the index so the
+                // next unchanged-refs scan hits the gate.
+                if let Some(idx) = index {
+                    write_through(&repo.path, &loops, idx);
+                }
+                all.extend(loops);
                 if let Some(update) = inv {
                     inventory_updates.push(update);
                 }
@@ -560,6 +766,85 @@ pub fn scan(
         }
     }
     (all, warnings, inventory_updates)
+}
+
+/// Sequential gate check for a single repo. `Some(Ok(..))` is a hit that the
+/// caller can use directly; `Some(Err(..))` is a fatal git error (e.g. no
+/// default branch); `None` is a cache miss to be recomputed in parallel.
+fn try_gate(
+    repo: &Path,
+    label: &str,
+    opts: &ScanOptions,
+    idx: &Index,
+) -> Option<Result<(Vec<OpenLoop>, Option<InvUpdate>)>> {
+    if opts.fresh {
+        return None;
+    }
+    let (_default, default_sha) = match default_branch_and_sha(repo) {
+        Ok(pair) => pair,
+        // Propagate the error so the repo is reported once, not retried.
+        Err(e) => return Some(Err(e)),
+    };
+    let common_dir = match git_common_dir(repo) {
+        Ok(cd) => cd,
+        Err(e) => return Some(Err(e)),
+    };
+    let repo_name = repo_name_from_common_dir(&common_dir);
+    let refs_fp = refs_fingerprint(&common_dir);
+    let gate_hash = inventory::common_dir_hash(&common_dir);
+
+    let rows = idx.cached_loops(&gate_hash, refs_fp, &default_sha)?;
+    // Serve only if the cached rows satisfy the caller's ahead/behind need.
+    if opts.need_ahead_behind && !rows.iter().all(|r| r.ahead.is_some()) {
+        return None;
+    }
+    let loops = rows
+        .into_iter()
+        .map(|r| OpenLoop {
+            root_label: label.to_string(),
+            repo_name: repo_name.clone(),
+            repo_path: r.worktree_path,
+            branch: r.branch,
+            head_sha: r.head_sha,
+            last_commit: r.last_commit,
+            ahead: r.ahead,
+            behind: r.behind,
+        })
+        .collect();
+    Some(Ok((loops, None)))
+}
+
+/// Persists freshly recomputed `loops` for `repo` to the index after a miss.
+fn write_through(repo: &Path, loops: &[OpenLoop], idx: &Index) {
+    let Ok(common_dir) = git_common_dir(repo) else {
+        return;
+    };
+    let Ok((default, default_sha)) = default_branch_and_sha(repo) else {
+        return;
+    };
+    let gate_hash = inventory::common_dir_hash(&common_dir);
+    let refs_fp = refs_fingerprint(&common_dir);
+    let rows: Vec<crate::index::LoopRow> = loops
+        .iter()
+        .map(|l| crate::index::LoopRow {
+            branch: l.branch.clone(),
+            head_sha: l.head_sha.clone(),
+            base_sha: default_sha.clone(),
+            ahead: l.ahead,
+            behind: l.behind,
+            last_commit: l.last_commit,
+            worktree_path: l.repo_path.clone(),
+        })
+        .collect();
+    idx.put_loops(
+        &gate_hash,
+        repo,
+        &common_dir,
+        &default,
+        &default_sha,
+        refs_fp,
+        &rows,
+    );
 }
 
 /// Branch-exclusive commits relative to the default (for the distillation prompt).
@@ -1278,6 +1563,371 @@ bare
             repos.len(),
             1,
             "N worktrees must dedup to 1 repo, got: {repos:?}"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Task 3: refs-fingerprint gate (#13)
+    // -----------------------------------------------------------------------
+
+    /// Helper: indexed open_loops with ahead/behind, returning only the loops.
+    fn open_loops_indexed_simple(
+        repo: &std::path::Path,
+        idx: Option<&Index>,
+        fresh: bool,
+    ) -> Vec<OpenLoop> {
+        let opts = ScanOptions {
+            need_ahead_behind: true,
+            fresh,
+            ..ScanOptions::default()
+        };
+        open_loops_indexed(repo, "root", &opts, idx).unwrap().0
+    }
+
+    /// (a) ZERO rev-list proof. After warming the cache with the real value
+    /// (ahead=1), we overwrite the *cached* ahead/behind with an impossible
+    /// sentinel (999/888) while keeping the SAME refs_fingerprint + default_sha.
+    /// A second indexed scan returns the sentinel — which the live git repo can
+    /// never produce — proving the gate served cached data and `rev-list` (and
+    /// for-each-ref / branch --merged) were not re-run.
+    #[test]
+    fn warm_scan_unchanged_refs_skips_rev_list() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path().join("app");
+        testutil::init_repo(&repo);
+        testutil::add_branch_with_commit(&repo, "feat/x", "x.txt");
+
+        let index = Index::open_in_memory();
+
+        // First scan: miss → real compute (ahead=1) + write-through.
+        let first = open_loops_indexed_simple(&repo, Some(&index), false);
+        assert_eq!(first.len(), 1);
+        assert_eq!(first[0].ahead, Some(1));
+        assert_eq!(first[0].behind, Some(0));
+
+        // Capture the live fingerprint/hash/default_sha, then poison the cached
+        // row's ahead/behind with a value the repo cannot produce.
+        let common = git_common_dir(&repo).unwrap();
+        let hash = crate::inventory::common_dir_hash(&common);
+        let refs_fp = refs_fingerprint(&common);
+        let (default, default_sha) = default_branch_and_sha(&repo).unwrap();
+        let poisoned = vec![crate::index::LoopRow {
+            branch: "feat/x".into(),
+            head_sha: first[0].head_sha.clone(),
+            base_sha: default_sha.clone(),
+            ahead: Some(999),
+            behind: Some(888),
+            last_commit: first[0].last_commit,
+            worktree_path: first[0].repo_path.clone(),
+        }];
+        index.put_loops(
+            &hash,
+            &repo,
+            &common,
+            &default,
+            &default_sha,
+            refs_fp,
+            &poisoned,
+        );
+
+        // Second scan: refs unchanged → gate HIT → returns the sentinel.
+        let second = open_loops_indexed_simple(&repo, Some(&index), false);
+        assert_eq!(second.len(), 1);
+        assert_eq!(
+            second[0].ahead,
+            Some(999),
+            "gate must serve cached ahead — git was re-run if this is 1"
+        );
+        assert_eq!(second[0].behind, Some(888));
+    }
+
+    /// (b) Advancing HEAD changes the fingerprint → recompute → fresh values.
+    #[test]
+    fn advancing_head_invalidates_and_recomputes() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path().join("app");
+        testutil::init_repo(&repo);
+        testutil::add_branch_with_commit(&repo, "feat/x", "x.txt"); // ahead=1
+
+        let index = Index::open_in_memory();
+
+        // Warm + poison with a sentinel under the OLD fingerprint.
+        let first = open_loops_indexed_simple(&repo, Some(&index), false);
+        assert_eq!(first[0].ahead, Some(1));
+        let common = git_common_dir(&repo).unwrap();
+        let hash = crate::inventory::common_dir_hash(&common);
+        let old_fp = refs_fingerprint(&common);
+        let (default, default_sha) = default_branch_and_sha(&repo).unwrap();
+        index.put_loops(
+            &hash,
+            &repo,
+            &common,
+            &default,
+            &default_sha,
+            old_fp,
+            &[crate::index::LoopRow {
+                branch: "feat/x".into(),
+                head_sha: first[0].head_sha.clone(),
+                base_sha: default_sha.clone(),
+                ahead: Some(999),
+                behind: Some(888),
+                last_commit: first[0].last_commit,
+                worktree_path: first[0].repo_path.clone(),
+            }],
+        );
+
+        // Add a second commit on feat/x → new loose ref mtime → fingerprint bumps.
+        testutil::git(&repo, &["checkout", "feat/x"]);
+        std::fs::write(repo.join("x2.txt"), "x2").unwrap();
+        testutil::git(&repo, &["add", "."]);
+        testutil::git(&repo, &["commit", "-m", "wip more"]);
+        testutil::git(&repo, &["checkout", "main"]);
+
+        let new_fp = refs_fingerprint(&common);
+        assert!(
+            new_fp >= old_fp,
+            "fingerprint must not go backwards: {old_fp} -> {new_fp}"
+        );
+
+        // Second scan: fingerprint differs → MISS → real recompute (ahead=2).
+        let second = open_loops_indexed_simple(&repo, Some(&index), false);
+        assert_eq!(
+            second[0].ahead,
+            Some(2),
+            "must recompute after HEAD advance"
+        );
+        assert_eq!(second[0].behind, Some(0));
+    }
+
+    /// (c) Changing the default-branch SHA invalidates the cache even when the
+    /// branch's own refs and the gross fingerprint match the stored default_sha.
+    #[test]
+    fn default_sha_change_invalidates() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path().join("app");
+        testutil::init_repo(&repo);
+        testutil::add_branch_with_commit(&repo, "feat/x", "x.txt");
+
+        let index = Index::open_in_memory();
+        let first = open_loops_indexed_simple(&repo, Some(&index), false);
+        assert_eq!(first[0].ahead, Some(1));
+
+        let common = git_common_dir(&repo).unwrap();
+        let hash = crate::inventory::common_dir_hash(&common);
+        let refs_fp = refs_fingerprint(&common);
+        let (default, _real_sha) = default_branch_and_sha(&repo).unwrap();
+
+        // Store a poisoned row under a STALE default_sha but the live fingerprint.
+        index.put_loops(
+            &hash,
+            &repo,
+            &common,
+            &default,
+            "stale_default_sha_0000000000000000000000",
+            refs_fp,
+            &[crate::index::LoopRow {
+                branch: "feat/x".into(),
+                head_sha: first[0].head_sha.clone(),
+                base_sha: "stale_default_sha_0000000000000000000000".into(),
+                ahead: Some(999),
+                behind: Some(888),
+                last_commit: first[0].last_commit,
+                worktree_path: first[0].repo_path.clone(),
+            }],
+        );
+
+        // The live default_sha != stored stale default_sha → MISS → recompute.
+        let second = open_loops_indexed_simple(&repo, Some(&index), false);
+        assert_eq!(
+            second[0].ahead,
+            Some(1),
+            "stale default_sha must force recompute, not serve 999"
+        );
+    }
+
+    /// (d) `fresh: true` bypasses the gate even when a (poisoned) cache exists.
+    #[test]
+    fn fresh_bypasses_the_gate() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path().join("app");
+        testutil::init_repo(&repo);
+        testutil::add_branch_with_commit(&repo, "feat/x", "x.txt");
+
+        let index = Index::open_in_memory();
+        let first = open_loops_indexed_simple(&repo, Some(&index), false);
+
+        // Poison the cache under the live fingerprint/default_sha.
+        let common = git_common_dir(&repo).unwrap();
+        let hash = crate::inventory::common_dir_hash(&common);
+        let refs_fp = refs_fingerprint(&common);
+        let (default, default_sha) = default_branch_and_sha(&repo).unwrap();
+        index.put_loops(
+            &hash,
+            &repo,
+            &common,
+            &default,
+            &default_sha,
+            refs_fp,
+            &[crate::index::LoopRow {
+                branch: "feat/x".into(),
+                head_sha: first[0].head_sha.clone(),
+                base_sha: default_sha.clone(),
+                ahead: Some(999),
+                behind: Some(888),
+                last_commit: first[0].last_commit,
+                worktree_path: first[0].repo_path.clone(),
+            }],
+        );
+
+        // fresh=true must IGNORE the poisoned cache and recompute real values.
+        let fresh = open_loops_indexed_simple(&repo, Some(&index), true);
+        assert_eq!(
+            fresh[0].ahead,
+            Some(1),
+            "fresh must recompute, not serve 999"
+        );
+        assert_eq!(fresh[0].behind, Some(0));
+    }
+
+    /// (e) A brand-new branch after caching → fingerprint changes → it appears.
+    #[test]
+    fn new_branch_after_caching_appears() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path().join("app");
+        testutil::init_repo(&repo);
+        testutil::add_branch_with_commit(&repo, "feat/x", "x.txt");
+
+        let index = Index::open_in_memory();
+        let first = open_loops_indexed_simple(&repo, Some(&index), false);
+        assert_eq!(first.len(), 1);
+
+        // Add a brand-new unmerged branch.
+        testutil::add_branch_with_commit(&repo, "feat/y", "y.txt");
+
+        // Fingerprint must have changed (new loose ref under refs/heads).
+        let second = open_loops_indexed_simple(&repo, Some(&index), false);
+        let mut names: Vec<_> = second.iter().map(|l| l.branch.clone()).collect();
+        names.sort();
+        assert_eq!(names, vec!["feat/x".to_string(), "feat/y".to_string()]);
+    }
+
+    /// A cache HIT whose rows lack ahead/behind must NOT be served to a caller
+    /// that needs them — it degrades to a recompute (correctness guard).
+    #[test]
+    fn hit_with_null_ahead_behind_recomputes_when_needed() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path().join("app");
+        testutil::init_repo(&repo);
+        testutil::add_branch_with_commit(&repo, "feat/x", "x.txt");
+
+        let index = Index::open_in_memory();
+        // Warm the index with a LIGHT-phase scan (no ahead/behind) so the cached
+        // rows have NULL ahead/behind under the live fingerprint.
+        let light_opts = ScanOptions {
+            need_ahead_behind: false,
+            ..ScanOptions::default()
+        };
+        let light = open_loops_indexed(&repo, "root", &light_opts, Some(&index))
+            .unwrap()
+            .0;
+        assert_eq!(light[0].ahead, None);
+
+        // Now ask WITH ahead/behind: the NULL-ahead cache must not be served.
+        let full = open_loops_indexed_simple(&repo, Some(&index), false);
+        assert_eq!(
+            full[0].ahead,
+            Some(1),
+            "must recompute when cached rows lack the requested ahead/behind"
+        );
+        assert_eq!(full[0].behind, Some(0));
+    }
+
+    /// `scan_indexed(None)` is identical to `scan`: the gate is inert.
+    #[test]
+    fn scan_indexed_none_matches_scan() {
+        let tmp = tempfile::tempdir().unwrap();
+        let api = tmp.path().join("api-service");
+        testutil::init_repo(&api);
+        testutil::add_branch_with_commit(&api, "feat/api", "a.txt");
+        let labels = vec![(tmp.path().to_path_buf(), "r".to_string())];
+        let opts = ScanOptions {
+            need_ahead_behind: true,
+            ..ScanOptions::default()
+        };
+        let (loops, warnings, _) =
+            scan_indexed(&[tmp.path().to_path_buf()], &labels, 4, &opts, None, None);
+        assert!(warnings.is_empty(), "warnings: {warnings:?}");
+        assert_eq!(loops.len(), 1);
+        assert_eq!(loops[0].branch, "feat/api");
+        assert_eq!(loops[0].ahead, Some(1));
+    }
+
+    /// End-to-end through `scan_indexed`: a warm scan with an index serves the
+    /// poisoned cache (gate hit on the sequential path), proving the heavy phase
+    /// was skipped at the scan level too.
+    #[test]
+    fn scan_indexed_warm_serves_cache() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path().join("app");
+        testutil::init_repo(&repo);
+        testutil::add_branch_with_commit(&repo, "feat/x", "x.txt");
+        let labels = vec![(tmp.path().to_path_buf(), "root".to_string())];
+        let opts = ScanOptions {
+            need_ahead_behind: true,
+            ..ScanOptions::default()
+        };
+        let index = Index::open_in_memory();
+
+        // Cold scan warms the index (write-through).
+        let (cold, _, _) = scan_indexed(
+            &[tmp.path().to_path_buf()],
+            &labels,
+            4,
+            &opts,
+            None,
+            Some(&index),
+        );
+        assert_eq!(cold.len(), 1);
+        assert_eq!(cold[0].ahead, Some(1));
+
+        // Poison the cache under the live gate.
+        let common = git_common_dir(&repo).unwrap();
+        let hash = crate::inventory::common_dir_hash(&common);
+        let refs_fp = refs_fingerprint(&common);
+        let (default, default_sha) = default_branch_and_sha(&repo).unwrap();
+        index.put_loops(
+            &hash,
+            &repo,
+            &common,
+            &default,
+            &default_sha,
+            refs_fp,
+            &[crate::index::LoopRow {
+                branch: "feat/x".into(),
+                head_sha: cold[0].head_sha.clone(),
+                base_sha: default_sha.clone(),
+                ahead: Some(999),
+                behind: Some(888),
+                last_commit: cold[0].last_commit,
+                worktree_path: cold[0].repo_path.clone(),
+            }],
+        );
+
+        // Warm scan: gate hit on the sequential path → sentinel served.
+        let (warm, warnings, _) = scan_indexed(
+            &[tmp.path().to_path_buf()],
+            &labels,
+            4,
+            &opts,
+            None,
+            Some(&index),
+        );
+        assert!(warnings.is_empty(), "warnings: {warnings:?}");
+        assert_eq!(warm.len(), 1);
+        assert_eq!(
+            warm[0].ahead,
+            Some(999),
+            "scan_indexed warm path must serve cached loops, not re-run git"
         );
     }
 }

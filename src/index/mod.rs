@@ -8,8 +8,25 @@
 //! Schema is set to `user_version = 1` after the initial migration. Callers
 //! in later tasks wire read/write logic on top of the tables created here.
 
+use chrono::{DateTime, TimeZone, Utc};
 use rusqlite::{Connection, OpenFlags};
 use std::path::{Path, PathBuf};
+
+/// One cached open-loop row for a repo, persisted in the `loops` table.
+///
+/// Mirrors the heavy-phase output of `scanner::open_loops` for a single
+/// unmerged branch. `ahead`/`behind` are `None` when the cached scan ran
+/// without `need_ahead_behind` (light phase only).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LoopRow {
+    pub branch: String,
+    pub head_sha: String,
+    pub base_sha: String,
+    pub ahead: Option<u32>,
+    pub behind: Option<u32>,
+    pub last_commit: DateTime<Utc>,
+    pub worktree_path: PathBuf,
+}
 
 /// SQLite-backed cache index.
 ///
@@ -107,6 +124,211 @@ impl Index {
             rusqlite::params![common_dir_hash, path_str.as_ref(), cd_str.as_ref()],
         ) {
             eprintln!("warning: index put_repo_common_dir failed: {e:#}");
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // Public cache accessors (Task 3): refs-fingerprint gate
+    // -------------------------------------------------------------------------
+
+    /// Returns the cached loops for `hash`, but ONLY when the stored repo row
+    /// proves the cache is still valid:
+    ///
+    /// 1. `repos.refs_fingerprint == refs_fp` (refs haven't changed), AND
+    /// 2. `repos.default_sha == default_sha` (the base hasn't moved).
+    ///
+    /// Returns `None` on any mismatch, on a missing/un-populated repo row, or on
+    /// any index error. A NULL `default_sha` / `refs_fingerprint` (a repo row
+    /// inserted by `put_repo_common_dir` but never `put_loops`'d) is a clean
+    /// miss — no warning is emitted, since it is the normal pre-`put_loops` state.
+    pub fn cached_loops(
+        &self,
+        hash: &str,
+        refs_fp: i64,
+        default_sha: &str,
+    ) -> Option<Vec<LoopRow>> {
+        // Read the gate columns. NULL columns map to `None` so an un-populated
+        // repos row is a clean miss rather than a warning.
+        let gate: Option<(i64, String)> = match self.conn.query_row(
+            "SELECT refs_fingerprint, default_sha FROM repos WHERE common_dir_hash = ?1",
+            rusqlite::params![hash],
+            |row| {
+                let fp: Option<i64> = row.get(0)?;
+                let sha: Option<String> = row.get(1)?;
+                Ok(fp.zip(sha))
+            },
+        ) {
+            Ok(g) => g,
+            Err(rusqlite::Error::QueryReturnedNoRows) => return None,
+            Err(e) => {
+                eprintln!("warning: index cached_loops gate query failed: {e:#}");
+                return None;
+            }
+        };
+
+        let (stored_fp, stored_sha) = gate?;
+        if stored_fp != refs_fp || stored_sha != default_sha {
+            return None;
+        }
+
+        // Gate passed: load the loop rows.
+        let mut stmt = match self.conn.prepare(
+            "SELECT branch, head_sha, base_sha, ahead, behind, last_commit, worktree_path
+             FROM loops WHERE common_dir_hash = ?1 ORDER BY branch",
+        ) {
+            Ok(s) => s,
+            Err(e) => {
+                eprintln!("warning: index cached_loops prepare failed: {e:#}");
+                return None;
+            }
+        };
+        let rows = stmt.query_map(rusqlite::params![hash], |row| {
+            let branch: String = row.get(0)?;
+            let head_sha: String = row.get(1)?;
+            let base_sha: String = row.get(2)?;
+            let ahead: Option<i64> = row.get(3)?;
+            let behind: Option<i64> = row.get(4)?;
+            let last_commit_secs: i64 = row.get(5)?;
+            let worktree_path: String = row.get(6)?;
+            Ok(LoopRow {
+                branch,
+                head_sha,
+                base_sha,
+                ahead: ahead.map(|v| v as u32),
+                behind: behind.map(|v| v as u32),
+                last_commit: Utc
+                    .timestamp_opt(last_commit_secs, 0)
+                    .single()
+                    .unwrap_or_default(),
+                worktree_path: PathBuf::from(worktree_path),
+            })
+        });
+        let rows = match rows {
+            Ok(mapped) => mapped.collect::<Result<Vec<_>, _>>(),
+            Err(e) => {
+                eprintln!("warning: index cached_loops query failed: {e:#}");
+                return None;
+            }
+        };
+        match rows {
+            Ok(v) => Some(v),
+            Err(e) => {
+                eprintln!("warning: index cached_loops row decode failed: {e:#}");
+                None
+            }
+        }
+    }
+
+    /// Write-through for a completed scan of one repo: upserts the `repos` row
+    /// (default branch/SHA, refs fingerprint, last_indexed) and REPLACES the
+    /// repo's `loops` rows — all in a single transaction.
+    ///
+    /// On any index error, prints a warning and continues (git is the source of
+    /// truth; the index is disposable).
+    #[allow(clippy::too_many_arguments)]
+    pub fn put_loops(
+        &self,
+        hash: &str,
+        path: &Path,
+        common_dir: &Path,
+        default_branch: &str,
+        default_sha: &str,
+        refs_fp: i64,
+        rows: &[LoopRow],
+    ) {
+        if let Err(e) = self.put_loops_tx(
+            hash,
+            path,
+            common_dir,
+            default_branch,
+            default_sha,
+            refs_fp,
+            rows,
+        ) {
+            eprintln!("warning: index put_loops failed: {e:#}");
+        }
+    }
+
+    /// Inner fallible body of [`Self::put_loops`], run inside one transaction.
+    #[allow(clippy::too_many_arguments)]
+    fn put_loops_tx(
+        &self,
+        hash: &str,
+        path: &Path,
+        common_dir: &Path,
+        default_branch: &str,
+        default_sha: &str,
+        refs_fp: i64,
+        rows: &[LoopRow],
+    ) -> Result<(), rusqlite::Error> {
+        let path_str = path.to_string_lossy();
+        let cd_str = common_dir.to_string_lossy();
+        let now = Utc::now().timestamp();
+
+        self.conn.execute_batch("BEGIN")?;
+        let res = (|| -> Result<(), rusqlite::Error> {
+            // Upsert the repos row. Key on common_dir_hash (PK) so a row that
+            // already exists from put_repo_common_dir is updated in place; also
+            // resolve a possible path UNIQUE conflict the same way.
+            self.conn.execute(
+                "INSERT INTO repos
+                     (common_dir_hash, path, common_dir, default_branch,
+                      default_sha, refs_fingerprint, last_indexed)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+                 ON CONFLICT(common_dir_hash) DO UPDATE SET
+                     path             = excluded.path,
+                     common_dir       = excluded.common_dir,
+                     default_branch   = excluded.default_branch,
+                     default_sha      = excluded.default_sha,
+                     refs_fingerprint = excluded.refs_fingerprint,
+                     last_indexed     = excluded.last_indexed",
+                rusqlite::params![
+                    hash,
+                    path_str.as_ref(),
+                    cd_str.as_ref(),
+                    default_branch,
+                    default_sha,
+                    refs_fp,
+                    now,
+                ],
+            )?;
+
+            // Replace the repo's loops rows: delete then re-insert.
+            self.conn.execute(
+                "DELETE FROM loops WHERE common_dir_hash = ?1",
+                rusqlite::params![hash],
+            )?;
+            for row in rows {
+                self.conn.execute(
+                    "INSERT INTO loops
+                         (common_dir_hash, branch, head_sha, base_sha,
+                          ahead, behind, last_commit, worktree_path)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                    rusqlite::params![
+                        hash,
+                        row.branch,
+                        row.head_sha,
+                        row.base_sha,
+                        row.ahead.map(i64::from),
+                        row.behind.map(i64::from),
+                        row.last_commit.timestamp(),
+                        row.worktree_path.to_string_lossy().as_ref(),
+                    ],
+                )?;
+            }
+            Ok(())
+        })();
+
+        match res {
+            Ok(()) => {
+                self.conn.execute_batch("COMMIT")?;
+                Ok(())
+            }
+            Err(e) => {
+                // Best-effort rollback; report the original error.
+                let _ = self.conn.execute_batch("ROLLBACK");
+                Err(e)
+            }
         }
     }
 
@@ -379,5 +601,206 @@ mod tests {
         let (h, cd) = index.cached_common_dir(path).unwrap();
         assert_eq!(h, "hash2");
         assert_eq!(cd, cd2);
+    }
+
+    // -----------------------------------------------------------------------
+    // (f) Task 3: put_loops / cached_loops refs-fingerprint gate
+    // -----------------------------------------------------------------------
+
+    fn sample_rows() -> Vec<LoopRow> {
+        vec![
+            LoopRow {
+                branch: "feat/a".into(),
+                head_sha: "a".repeat(40),
+                base_sha: "d".repeat(40),
+                ahead: Some(3),
+                behind: Some(1),
+                last_commit: Utc.timestamp_opt(1_700_000_000, 0).single().unwrap(),
+                worktree_path: PathBuf::from("/wt/a"),
+            },
+            LoopRow {
+                branch: "feat/b".into(),
+                head_sha: "b".repeat(40),
+                base_sha: "d".repeat(40),
+                ahead: Some(7),
+                behind: Some(0),
+                last_commit: Utc.timestamp_opt(1_700_000_100, 0).single().unwrap(),
+                worktree_path: PathBuf::from("/wt/b"),
+            },
+        ]
+    }
+
+    #[test]
+    fn put_loops_then_cached_loops_round_trip_on_matching_gate() {
+        let index = Index::open_in_memory();
+        let hash = "deadbeef00000000";
+        let default_sha = "d".repeat(40);
+        let rows = sample_rows();
+
+        // Miss before any write.
+        assert!(index.cached_loops(hash, 42, &default_sha).is_none());
+
+        index.put_loops(
+            hash,
+            std::path::Path::new("/repo"),
+            std::path::Path::new("/repo/.git"),
+            "main",
+            &default_sha,
+            42,
+            &rows,
+        );
+
+        let got = index
+            .cached_loops(hash, 42, &default_sha)
+            .expect("matching fingerprint + default_sha must hit");
+        assert_eq!(got, rows);
+    }
+
+    #[test]
+    fn cached_loops_misses_on_fingerprint_mismatch() {
+        let index = Index::open_in_memory();
+        let hash = "deadbeef00000001";
+        let default_sha = "d".repeat(40);
+        index.put_loops(
+            hash,
+            std::path::Path::new("/repo"),
+            std::path::Path::new("/repo/.git"),
+            "main",
+            &default_sha,
+            42,
+            &sample_rows(),
+        );
+        // Different fingerprint → miss.
+        assert!(index.cached_loops(hash, 43, &default_sha).is_none());
+        // Same fingerprint → hit.
+        assert!(index.cached_loops(hash, 42, &default_sha).is_some());
+    }
+
+    #[test]
+    fn cached_loops_misses_on_default_sha_mismatch() {
+        let index = Index::open_in_memory();
+        let hash = "deadbeef00000002";
+        index.put_loops(
+            hash,
+            std::path::Path::new("/repo"),
+            std::path::Path::new("/repo/.git"),
+            "main",
+            &"d".repeat(40),
+            42,
+            &sample_rows(),
+        );
+        // Same fingerprint but a different default_sha (base moved) → miss.
+        assert!(index.cached_loops(hash, 42, &"e".repeat(40)).is_none());
+    }
+
+    #[test]
+    fn cached_loops_unpopulated_repos_row_is_clean_miss() {
+        let index = Index::open_in_memory();
+        let path = std::path::Path::new("/repo");
+        let cd = std::path::Path::new("/repo/.git");
+        let hash = "deadbeef00000003";
+        // Insert a repos row WITHOUT loops data (NULL default_sha / fingerprint).
+        index.put_repo_common_dir(path, hash, cd);
+        // Must be a clean miss (no panic, no spurious behaviour).
+        assert!(index.cached_loops(hash, 0, "").is_none());
+        assert!(index.cached_loops(hash, 42, &"d".repeat(40)).is_none());
+    }
+
+    #[test]
+    fn put_loops_replaces_previous_rows_in_one_transaction() {
+        let index = Index::open_in_memory();
+        let hash = "deadbeef00000004";
+        let default_sha = "d".repeat(40);
+        index.put_loops(
+            hash,
+            std::path::Path::new("/repo"),
+            std::path::Path::new("/repo/.git"),
+            "main",
+            &default_sha,
+            42,
+            &sample_rows(), // 2 rows
+        );
+        // Re-write with a single row and a new fingerprint.
+        let one = vec![LoopRow {
+            branch: "feat/only".into(),
+            head_sha: "c".repeat(40),
+            base_sha: default_sha.clone(),
+            ahead: Some(1),
+            behind: Some(0),
+            last_commit: Utc.timestamp_opt(1_700_000_500, 0).single().unwrap(),
+            worktree_path: PathBuf::from("/wt/only"),
+        }];
+        index.put_loops(
+            hash,
+            std::path::Path::new("/repo"),
+            std::path::Path::new("/repo/.git"),
+            "main",
+            &default_sha,
+            99,
+            &one,
+        );
+        let got = index.cached_loops(hash, 99, &default_sha).unwrap();
+        assert_eq!(got, one, "old rows must be replaced, not appended");
+    }
+
+    #[test]
+    fn put_loops_upgrades_existing_common_dir_row() {
+        // A repos row created by put_repo_common_dir (Task 2, NULL gate columns)
+        // must be upgraded in place by put_loops — same common_dir_hash PK — so
+        // the gate hits afterwards and no duplicate row is created.
+        let index = Index::open_in_memory();
+        let path = std::path::Path::new("/repo");
+        let cd = std::path::Path::new("/repo/.git");
+        let hash = "deadbeef00000005";
+        index.put_repo_common_dir(path, hash, cd);
+        // Pre-upgrade: repos row exists but gate columns are NULL → clean miss.
+        let default_sha = "d".repeat(40);
+        assert!(index.cached_loops(hash, 7, &default_sha).is_none());
+
+        index.put_loops(hash, path, cd, "main", &default_sha, 7, &sample_rows());
+
+        // Exactly one repos row for this hash, now populated → gate hits.
+        let repo_count: i64 = index
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM repos WHERE common_dir_hash = ?1",
+                rusqlite::params![hash],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            repo_count, 1,
+            "put_loops must upgrade in place, not duplicate"
+        );
+        assert!(index.cached_loops(hash, 7, &default_sha).is_some());
+    }
+
+    #[test]
+    fn cached_loops_preserves_null_ahead_behind() {
+        // Light-phase rows (no ahead/behind) round-trip as None.
+        let index = Index::open_in_memory();
+        let hash = "deadbeef00000006";
+        let default_sha = "d".repeat(40);
+        let rows = vec![LoopRow {
+            branch: "feat/light".into(),
+            head_sha: "a".repeat(40),
+            base_sha: default_sha.clone(),
+            ahead: None,
+            behind: None,
+            last_commit: Utc.timestamp_opt(1_700_000_000, 0).single().unwrap(),
+            worktree_path: PathBuf::from("/wt/light"),
+        }];
+        index.put_loops(
+            hash,
+            std::path::Path::new("/repo"),
+            std::path::Path::new("/repo/.git"),
+            "main",
+            &default_sha,
+            1,
+            &rows,
+        );
+        let got = index.cached_loops(hash, 1, &default_sha).unwrap();
+        assert_eq!(got[0].ahead, None);
+        assert_eq!(got[0].behind, None);
     }
 }
