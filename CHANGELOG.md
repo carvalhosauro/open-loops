@@ -1,6 +1,58 @@
 # Changelog
 ## unreleased
 
+## 1.5.0 - 2026-06-29
+
+### Docs
+- De-link references to consolidated (deleted) sources
+- Remove ADRs/plans/specs/audit consolidated into docs/architecture
+- Add architecture index and repoint references
+- Address review fixes for build-ci-release
+- Address review fixes for config-state
+- Address review fixes for cli-output
+- Address review fixes for cache-index
+- Add build-ci-release domain doc
+- Add cli-output domain doc
+- Add config-state domain doc
+- Add cache-index domain doc
+- Address review fixes for resume-distill
+- Add resume-distill domain doc
+- Address review fixes for inventory-evidence
+- Add inventory-evidence domain doc
+- Address review fixes for query-engine
+- Add query-engine domain doc
+- Address review fixes for sessions-attribution
+- Add sessions-attribution domain doc
+- Address review fixes for discovery
+- Add discovery domain doc
+- Address review fixes for overview
+- Add overview and scaffold docs/architecture
+- Add architecture-domain-docs spec and plan
+- Add code-hygiene review report (2026-06-29)
+- SQLite index migration plan (#13 #14 #15 #17)
+- Clarify prune semantics and fix ADR 0008 collision
+- ADR 0008 SQLite index + features/config/changelog/roadmap
+
+### Features
+- Wire SQLite index live + refresh rebuild/prune (#13, #14, #15, #17)
+- Bound mention probe + stable ranking + FTS index (#14, #15)
+- Refs-fingerprint gate caches loops to skip rev-list ([#13](https://github.com/carvalhosauro/open-loops/pull/13))
+- Cache git common-dir in index to skip dedup rev-parse ([#17](https://github.com/carvalhosauro/open-loops/pull/17))
+- SQLite index scaffold with tolerant open and schema
+
+### Fixes
+- Migrate stale contentless sessions_fts to user_version 2
+- Reindex session on size change to close same-second FTS staleness
+- Fold worktrees/ mtime into refs fingerprint so worktree changes invalidate the gate
+
+### Internals
+- Bump anyhow to 1.0.103 (RUSTSEC-2026-0190)
+- Single-source attr names and reset rule, why-comments
+- Dedupe orchestration and make comments explain why
+
+### Performance
+- Parallelize gate git-probes to fix cold many-repos regression
+
 ### Features
 - SQLite index at `~/.open-loops/index.db` (disposable cache; git stays the source of truth)
 - Refs-fingerprint gate caches loops so warm scans skip `rev-list`/`for-each-ref` (#13)
