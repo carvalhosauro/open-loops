@@ -37,7 +37,7 @@ sequencing*, not the user manual.
 | File | Responsibility |
 |---|---|
 | [`src/main.rs`](../../src/main.rs:5) | The binary entrypoint: `Cli::parse()`, base-dir resolution (`OPEN_LOOPS_HOME`), the `match` that dispatches each `Command` variant to its `run_*`, and the single error sink (`error: …`, exit 1). The only `pub fn` is `main`; everything else is library. |
-| [`src/cli_command.rs`](../../src/cli_command.rs:5) | The clap command surface: the `Cli` parser and the `Command` subcommand enum. Declared once and shared by the runtime and `build.rs` (via `include!`) so the binary and the completion/man generation never drift. |
+| [`src/cli_command.rs`](../../src/cli_command.rs:8) | The clap command surface: the `Cli` parser and the `Command` subcommand enum. Declared once and shared by the runtime and `build.rs` (via `include!`) so the binary and the completion/man generation never drift. |
 | [`src/cli.rs`](../../src/cli.rs:1) | The orchestration layer: one `run_*` function per subcommand plus the shared preamble (`load_cfg_with_roots`), the plan-resolution wrapper (`resolve_plan_persisting`), and the scan/write-through helper (`scan_with_inventory`). Holds no domain logic; it only sequences the other domains. |
 | [`src/output.rs`](../../src/output.rs:1) | The shared render layer: the inventory table (`render_table`), the worktree cleanup table (`render_worktrees`), and the human-age/`fmt_count` formatters. Pure string-building — no I/O, no git, no config. |
 
@@ -112,16 +112,18 @@ flowchart TD
     dispatch -->|Completions| comp["run_completions: clap_complete"]
     dispatch -->|Refresh| refresh["run_refresh (cli.rs)"]
 
-    list --> preamble["load_cfg_with_roots +<br/>resolve_plan_persisting"]
-    resume --> preamble
-    refresh --> preamble
-    wt --> preamble
+    list --> loadcfg["load_cfg_with_roots<br/>(shared preamble: roots invariant)"]
+    resume --> loadcfg
+    refresh --> loadcfg
+    wt --> loadcfg
 
-    preamble --> domains["orchestrate domains:<br/>query → discovery → inventory<br/>(scan_with_inventory write-through)"]
+    loadcfg -->|list / resume / refresh| resolveplan["resolve_plan_persisting<br/>(query → ScanPlan, persist @context)"]
+    loadcfg -->|worktrees| rwt["output::render_worktrees<br/>(verdict sort + cleanup block) -> stdout"]
+
+    resolveplan --> domains["orchestrate domains:<br/>query → discovery → inventory<br/>(scan_with_inventory write-through)"]
 
     domains --> kind{which handler?}
     kind -->|list| rtable["output::render_table<br/>(idle sort) -> stdout"]
-    kind -->|worktrees| rwt["output::render_worktrees<br/>(verdict sort + cleanup block) -> stdout"]
     kind -->|refresh| rprune["write + prune inventory/index<br/>-> 'refreshed N repos' (stderr)"]
     kind -->|resume| rresume["evidence + cache + distill<br/>(see 05-resume-distill) -> stdout"]
 
