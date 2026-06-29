@@ -45,7 +45,7 @@ index is a **disposable cache**, not a store of record:
   remains the `Option<&Index> == None` memo. On the live path the SQLite
   refs-fingerprint gate supersedes it for warm hits (see Consequences).
 
-### Schema (`user_version = 1`)
+### Schema (`user_version = 2`)
 
 ```sql
 CREATE TABLE repos (
@@ -77,15 +77,26 @@ CREATE TABLE sessions (
   size      INTEGER NOT NULL
 );
 
+-- Contentful FTS5 (no content=''): owns its text rows so row-level
+-- DELETE ... WHERE rowid=? works when a session file is reindexed.
 CREATE VIRTUAL TABLE sessions_fts USING fts5(
   text,
-  path UNINDEXED,
-  content=''                            -- contentless FTS: small db, MATCH + rowid
+  path UNINDEXED
 );
 ```
 
 `sessions.rowid` ↔ `sessions_fts.rowid` correlate the metadata row to its FTS
-entry. Contentless FTS keeps the db small: we only need `MATCH` + `rowid → path`.
+entry. The table is **contentful** (not `content=''`) so that the reindex path
+can issue `DELETE … WHERE rowid = ?` when a session file changes; the per-row
+text is a bounded tail, so storage cost is negligible.
+
+**Migration history:**
+- `user_version = 1` — initial schema; an intermediate build of the branch used
+  `content=''` (contentless) for `sessions_fts`, which silently rejected
+  row-level DELETEs needed for reindex.
+- `user_version = 2` — FTS heal: a DB at version 1 has its `sessions_fts`
+  dropped and recreated as a contentful table; `repos`, `loops`, and `sessions`
+  rows are untouched. A fresh DB goes straight to version 2.
 
 `rusqlite` is pinned with the `bundled` feature (no system `libsqlite3`
 dependency), opened in **WAL** mode so two `loops` processes can read/write

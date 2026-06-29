@@ -453,8 +453,7 @@ impl Index {
         let fts_query = format!("\"{}\"", branch.replace('"', "\"\""));
 
         // Join sessions_fts to sessions via rowid (FTS5 always exposes rowid).
-        // The path UNINDEXED column in sessions_fts is not readable via SELECT
-        // on a contentless (content='') table — use the rowid join instead.
+        // Join via rowid to recover `path` alongside the FTS MATCH.
         let mut stmt = self.conn.prepare(
             "SELECT s.path FROM sessions_fts f
              JOIN sessions s ON s.rowid = f.rowid
@@ -562,7 +561,12 @@ impl Index {
             .map_err(|e| anyhow::anyhow!("applying pragmas: {e}"))
     }
 
-    /// Reads `user_version`; if < 1, creates all tables and bumps to 1.
+    /// Reads `user_version` and applies all pending migrations in order.
+    ///
+    /// * `user_version = 0` → v1 schema (all four tables) → v1→v2 FTS heal = end at 2.
+    /// * `user_version = 1` → stale contentless `sessions_fts` from an intermediate
+    ///   build of this branch; v1→v2 migration drops and recreates it contentful.
+    /// * `user_version ≥ 2` → up to date; no-op.
     fn run_migrations(&mut self) -> Result<(), anyhow::Error> {
         let version: i32 = self
             .conn
@@ -572,7 +576,35 @@ impl Index {
         if version < 1 {
             self.create_schema_v1()?;
         }
+        if version < 2 {
+            self.migrate_v1_to_v2()?;
+        }
         Ok(())
+    }
+
+    /// Heals a stale `sessions_fts` created by earlier builds of this branch
+    /// that used `content=''` (contentless). Drops the old virtual table,
+    /// recreates it as a contentful FTS5 table, and bumps `user_version` to 2.
+    ///
+    /// When coming from a fresh create (`user_version` was 0), `create_schema_v1`
+    /// already built the contentful table, so this migration's DROP + recreate is
+    /// a fast no-op in terms of data: it leaves the schema at version 2 without
+    /// touching `repos`, `loops`, or `sessions`.
+    fn migrate_v1_to_v2(&mut self) -> Result<(), anyhow::Error> {
+        self.conn
+            .execute_batch(
+                "
+                BEGIN;
+                DROP TABLE IF EXISTS sessions_fts;
+                CREATE VIRTUAL TABLE sessions_fts USING fts5(
+                    text,
+                    path UNINDEXED
+                );
+                PRAGMA user_version = 2;
+                COMMIT;
+                ",
+            )
+            .map_err(|e| anyhow::anyhow!("migrating v1→v2 (FTS heal): {e}"))
     }
 
     /// Creates all four tables and sets `user_version = 1`.
@@ -706,7 +738,7 @@ mod tests {
             all_four_tables_present(&tables),
             "expected repos, loops, sessions, sessions_fts — got: {tables:?}"
         );
-        assert_eq!(user_version(&index.conn), 1);
+        assert_eq!(user_version(&index.conn), 2);
         assert!(tmp.path().join("index.db").exists());
     }
 
@@ -722,7 +754,7 @@ mod tests {
         }
         // Drop first connection, then reopen.
         let second = Index::open(tmp.path());
-        assert_eq!(user_version(&second.conn), 1);
+        assert_eq!(user_version(&second.conn), 2);
         let tables = get_tables(&second.conn);
         assert!(
             all_four_tables_present(&tables),
@@ -749,7 +781,7 @@ mod tests {
             all_four_tables_present(&tables),
             "tables missing after corrupt-rebuild: {tables:?}"
         );
-        assert_eq!(user_version(&index.conn), 1);
+        assert_eq!(user_version(&index.conn), 2);
     }
 
     // -----------------------------------------------------------------------
@@ -764,7 +796,109 @@ mod tests {
             all_four_tables_present(&tables),
             "in-memory index missing tables: {tables:?}"
         );
-        assert_eq!(user_version(&index.conn), 1);
+        assert_eq!(user_version(&index.conn), 2);
+    }
+
+    // -----------------------------------------------------------------------
+    // (d2) v1 contentless FTS → migrated to v2 contentful FTS
+    // -----------------------------------------------------------------------
+
+    /// Simulates a DB created by an earlier build of this branch that used
+    /// `content=''` (contentless) for `sessions_fts` and left `user_version = 1`.
+    /// After `run_migrations` the DB must be at `user_version = 2` with a
+    /// contentful `sessions_fts`, so that a DELETE-then-insert (reindex) no longer
+    /// errors and the session is findable via `session_mentions`.
+    #[test]
+    fn migrate_v1_contentless_fts_to_v2_contentful() {
+        // Build the stale "v1 contentless" state manually in a temp-file DB.
+        let tmp = TempDir::new().unwrap();
+        let db_path = tmp.path().join("index.db");
+
+        // Phase A: create the stale schema in its own connection, then close it.
+        {
+            let conn = Connection::open(&db_path).unwrap();
+            conn.execute_batch(
+                "
+                PRAGMA journal_mode=WAL;
+                BEGIN;
+                CREATE TABLE repos (
+                    common_dir_hash TEXT PRIMARY KEY,
+                    path            TEXT NOT NULL UNIQUE,
+                    common_dir      TEXT NOT NULL,
+                    default_branch  TEXT,
+                    default_sha     TEXT,
+                    refs_fingerprint INTEGER,
+                    last_indexed    INTEGER
+                );
+                CREATE TABLE loops (
+                    common_dir_hash TEXT NOT NULL,
+                    branch          TEXT NOT NULL,
+                    head_sha        TEXT NOT NULL,
+                    base_sha        TEXT NOT NULL,
+                    ahead           INTEGER,
+                    behind          INTEGER,
+                    last_commit     INTEGER NOT NULL,
+                    worktree_path   TEXT NOT NULL,
+                    PRIMARY KEY (common_dir_hash, branch)
+                );
+                CREATE TABLE sessions (
+                    path        TEXT PRIMARY KEY,
+                    repo_path   TEXT NOT NULL,
+                    mtime       INTEGER NOT NULL,
+                    size        INTEGER NOT NULL
+                );
+                CREATE VIRTUAL TABLE sessions_fts USING fts5(
+                    text,
+                    path UNINDEXED,
+                    content=''
+                );
+                PRAGMA user_version = 1;
+                COMMIT;
+                ",
+            )
+            .unwrap();
+        } // conn dropped / file closed
+
+        // Phase B: open via Index::open — migration must heal the stale FTS.
+        let index = Index::open(tmp.path());
+
+        // (a) user_version must be 2 after migration.
+        assert_eq!(
+            user_version(&index.conn),
+            2,
+            "migration must bump user_version to 2"
+        );
+
+        // (b) upsert_session + session_mentions must work (DELETE-then-insert no longer errors).
+        let path = std::path::Path::new("/fake/migrated-sess.jsonl");
+        let repo = std::path::Path::new("/home/g/app");
+        index.upsert_session(
+            path,
+            repo,
+            1_700_000_000,
+            100,
+            "[user] working on feat/migrated",
+        );
+        let mentions = index.session_mentions(repo, "feat/migrated");
+        assert!(
+            mentions.contains(&path.to_path_buf()),
+            "session must be findable via FTS after v1→v2 migration"
+        );
+
+        // Also verify that a second upsert (triggers DELETE old rowid + reinsert) works.
+        index.upsert_session(
+            path,
+            repo,
+            1_700_000_000,
+            200, // size grew → forces reindex DELETE
+            "[user] working on feat/migrated — extended",
+        );
+        assert!(
+            index
+                .session_mentions(repo, "feat/migrated")
+                .contains(&path.to_path_buf()),
+            "reindex DELETE must succeed on contentful FTS after migration"
+        );
     }
 
     // -----------------------------------------------------------------------
