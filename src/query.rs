@@ -84,33 +84,32 @@ pub fn parse(input: &str) -> Result<ScanPlan> {
         if tok.starts_with(':') {
             bail!("reports ({tok}) are not supported yet (ADR 0003 phase 5)");
         }
-        if let Some((name, val)) = split_attr(tok) {
-            match name {
-                "repo" => plan.repo_filters.push(val.to_string()),
-                "branch" => plan.branch_filters.push(val.to_string()),
-                "key" => plan.key_filters.push(val.to_string()),
-                "root" => plan.root_filters.push(val.to_string()),
-                "idle" => {
+        if let Some((attr, val)) = split_attr(tok) {
+            match attr {
+                Attr::Repo => plan.repo_filters.push(val.to_string()),
+                Attr::Branch => plan.branch_filters.push(val.to_string()),
+                Attr::Key => plan.key_filters.push(val.to_string()),
+                Attr::Root => plan.root_filters.push(val.to_string()),
+                Attr::Idle => {
                     let (cmp, rest) = split_cmp(val, true)
                         .ok_or_else(|| anyhow::anyhow!("idle needs a comparator, e.g. idle:>7d"))?;
                     plan.attr_filters
                         .push(AttrFilter::Idle(cmp, parse_duration(rest)?));
                 }
-                "ahead" => {
-                    // split_cmp(val, false) always returns Some — defaults to Cmp::Eq when no operator
+                // ahead/behind take an optional operator, so split_cmp(_, false)
+                // never returns None: a bare `ahead:N` means `ahead == N`.
+                Attr::Ahead => {
                     let (cmp, rest) = split_cmp(val, false).expect("optional op never None");
                     plan.attr_filters
                         .push(AttrFilter::Ahead(cmp, parse_count(rest)?));
                     plan.need_ahead_behind = true;
                 }
-                "behind" => {
-                    // split_cmp(val, false) always returns Some — defaults to Cmp::Eq when no operator
+                Attr::Behind => {
                     let (cmp, rest) = split_cmp(val, false).expect("optional op never None");
                     plan.attr_filters
                         .push(AttrFilter::Behind(cmp, parse_count(rest)?));
                     plan.need_ahead_behind = true;
                 }
-                _ => unreachable!("split_attr only returns known names"),
             }
         } else {
             plan.terms.push(tok.to_string());
@@ -136,18 +135,34 @@ pub enum ContextPersistence {
     Unchanged,
 }
 
+/// Reserved `@`-names that CLEAR the active context rather than naming a real
+/// one; both map to [`ContextPersistence::Clear`].
+const CONTEXT_RESET_NAMES: [&str; 2] = ["none", "all"];
+
+/// True for the reserved names that clear (not select) the active context.
+fn is_context_reset(name: &str) -> bool {
+    CONTEXT_RESET_NAMES.contains(&name)
+}
+
+/// Enforces the at-most-one-`@context` rule and returns the lone `@`-token
+/// (including its `@` prefix), or `None` when the query has no context token.
+fn single_context_token<'a>(tokens: &[&'a str]) -> Result<Option<&'a str>> {
+    let mut at_tokens = tokens.iter().filter(|t| t.starts_with('@'));
+    let first = at_tokens.next();
+    if at_tokens.next().is_some() {
+        bail!("only one @context per query");
+    }
+    Ok(first.copied())
+}
+
 /// Parses `@` usage for config persistence (call after [`resolve_plan`] succeeds).
 pub fn context_persistence_from_query(input: &str) -> Result<ContextPersistence> {
     let tokens: Vec<&str> = input.split_whitespace().collect();
-    let at_count = tokens.iter().filter(|t| t.starts_with('@')).count();
-    if at_count > 1 {
-        bail!("only one @context per query");
-    }
-    match tokens.iter().find(|t| t.starts_with('@')) {
+    match single_context_token(&tokens)? {
         None => Ok(ContextPersistence::Unchanged),
         Some(tok) => {
             let name = tok.strip_prefix('@').unwrap();
-            if name == "none" || name == "all" {
+            if is_context_reset(name) {
                 Ok(ContextPersistence::Clear)
             } else {
                 Ok(ContextPersistence::Set(name.to_string()))
@@ -195,12 +210,12 @@ pub fn merge_scan_plans(base: ScanPlan, overlay: ScanPlan) -> ScanPlan {
 }
 
 fn validate_context_filter(name: &str, filter: &str) -> Result<()> {
-    if filter.contains('@') {
-        bail!("context '{name}' filter cannot contain '@' or ':' (reports are phase 5)");
-    }
     for tok in filter.split_whitespace() {
+        if tok.contains('@') {
+            bail!("context '{name}' filter token '{tok}' cannot contain '@' (reports are ADR 0003 phase 5)");
+        }
         if tok.starts_with(':') {
-            bail!("context '{name}' filter cannot contain '@' or ':' (reports are phase 5)");
+            bail!("context '{name}' filter token '{tok}' cannot contain ':' (reports are ADR 0003 phase 5)");
         }
     }
     Ok(())
@@ -209,12 +224,7 @@ fn validate_context_filter(name: &str, filter: &str) -> Result<()> {
 /// Resolves `@context` tokens and default context into a single [`ScanPlan`].
 pub fn resolve_plan(input: &str, cfg: &Config, opts: &ResolveOptions) -> Result<ScanPlan> {
     let tokens: Vec<&str> = input.split_whitespace().collect();
-    let at_count = tokens.iter().filter(|t| t.starts_with('@')).count();
-    if at_count > 1 {
-        bail!("only one @context per query");
-    }
-
-    let has_at = at_count == 1;
+    let has_at = single_context_token(&tokens)?.is_some();
     let mut plans = Vec::new();
 
     if !has_at {
@@ -228,7 +238,7 @@ pub fn resolve_plan(input: &str, cfg: &Config, opts: &ResolveOptions) -> Result<
     let mut user_tokens = Vec::new();
     for tok in tokens {
         if let Some(name) = tok.strip_prefix('@') {
-            if name == "none" || name == "all" {
+            if is_context_reset(name) {
                 continue;
             }
             let filter = cfg.context_filter(name)?;
@@ -253,15 +263,41 @@ pub fn resolve_plan(input: &str, cfg: &Config, opts: &ResolveOptions) -> Result<
     }
 }
 
-/// Returns `(name, value)` when `tok` is `name:value` and `name` is a known
+/// The closed set of recognized attribute names. Single source of truth so the
+/// name->kind mapping lives in exactly one place (see [`Attr::parse`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Attr {
+    Repo,
+    Branch,
+    Key,
+    Root,
+    Idle,
+    Ahead,
+    Behind,
+}
+
+impl Attr {
+    /// Maps an attribute name to its kind. `None` for anything outside the set,
+    /// which lets `split_attr` fall through to treating the token as a bare term.
+    fn parse(name: &str) -> Option<Attr> {
+        match name {
+            "repo" => Some(Attr::Repo),
+            "branch" => Some(Attr::Branch),
+            "key" => Some(Attr::Key),
+            "root" => Some(Attr::Root),
+            "idle" => Some(Attr::Idle),
+            "ahead" => Some(Attr::Ahead),
+            "behind" => Some(Attr::Behind),
+            _ => None,
+        }
+    }
+}
+
+/// Returns `(attr, value)` when `tok` is `name:value` and `name` is a known
 /// attribute; otherwise `None` (the caller treats the token as a bare term).
-fn split_attr(tok: &str) -> Option<(&str, &str)> {
+fn split_attr(tok: &str) -> Option<(Attr, &str)> {
     let (name, val) = tok.split_once(':')?;
-    matches!(
-        name,
-        "repo" | "branch" | "key" | "root" | "idle" | "ahead" | "behind"
-    )
-    .then_some((name, val))
+    Some((Attr::parse(name)?, val))
 }
 
 /// Splits a leading comparator off a value. When `require_op` and none is
@@ -536,7 +572,8 @@ mod tests {
             current_context: None,
         };
         let err = resolve_plan("@bad", &cfg, &opts).unwrap_err().to_string();
-        assert!(err.contains("cannot contain '@' or ':'"), "got: {err}");
+        assert!(err.contains("cannot contain '@'"), "got: {err}");
+        assert!(err.contains("@work"), "got: {err}");
     }
 
     #[test]
