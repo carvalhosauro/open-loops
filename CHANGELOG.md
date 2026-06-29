@@ -1,6 +1,24 @@
 # Changelog
 ## unreleased
 
+## 1.4.0 - 2026-06-29
+
+### Docs
+- Contexts @ syntax and configuration (ADR 0003 phase 4)
+
+### Features
+- Persist active context in state.toml
+- Wire @context resolution in list, resume, refresh
+- Intersect multiple root filters in ScanPlan
+- Resolve @context tokens into ScanPlan
+- Add contexts table and default_context
+
+### Fixes
+- Treat empty LOOPS_CONTEXT as unset
+
+### Internals
+- @context scoping e2e
+
 ### Features
 - `@` context scopes: `[contexts.X]` in config, active context in `state.toml` (ADR 0003 phase 4)
 
