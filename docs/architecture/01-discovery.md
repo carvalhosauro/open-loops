@@ -134,8 +134,9 @@ flowchart TD
 
 In code, `scan_indexed` ([`src/scanner.rs:733`](../../src/scanner.rs:733)) drives
 the flow: it calls `find_repos_cached` (walk + dedup), filters by `repo:` name
-when the query pushed one down, then fans `open_loops` out across the discovered
-repos on a thread per repo (`std::thread::scope`). Inside `open_loops_indexed`
+when the query pushed one down (the `repo:` predicate is defined in
+[03-query-engine](03-query-engine.md)), then fans `open_loops` out across the
+discovered repos on a thread per repo (`std::thread::scope`). Inside `open_loops_indexed`
 ([`src/scanner.rs:451`](../../src/scanner.rs:451)) the *light phase* always runs
 (default branch, worktree map, merged set, `for-each-ref`); the *heavy phase*
 (`rev-list` for ahead/behind) runs only when the caller asks for ahead/behind,
@@ -218,10 +219,14 @@ in [docs/features.md](../features.md) — not duplicated here.
   ([`src/scanner.rs:378`](../../src/scanner.rs:378)).
 - **Hidden and heavy directories are pruned during descent.** Dot-prefixed
   directories and `node_modules` / `target` (`SKIP_DIRS`,
-  [`src/scanner.rs:127`](../../src/scanner.rs:127)) are not descended into. A
+  [`src/scanner.rs:127`](../../src/scanner.rs:127)) are not descended into
+  (`name.starts_with('.')`, [`src/scanner.rs:393`](../../src/scanner.rs:393)). A
   bare repo named `.bare` hidden under a dot-prefixed parent is therefore not
   discovered unless a root points directly at it or the container carries the
-  `.git` pointer — a known, documented edge case.
+  `.git` pointer — a known, documented edge case. The same rule applies to any
+  linked worktree whose checkout directory sits under a dot-prefixed parent
+  (e.g. a worktree at `~/repos/.wip/feature`) — the `.bare` case is called out
+  separately because it is the more common surprise.
 - **Default-branch resolution is defensive.** A stale or single-branch
   `origin/HEAD` that names a branch with no local ref is *not* honoured; the code
   falls through to `main`/`master` so the repo does not silently disappear
@@ -231,9 +236,9 @@ in [docs/features.md](../features.md) — not duplicated here.
   directory name; `foo.git` → `foo`), so the same repo gets the same name
   regardless of which worktree was scanned
   ([`src/scanner.rs:138`](../../src/scanner.rs:138)).
-- **`git proscribes` one branch in two worktrees**, so the branch→worktree map
-  is 1:1 and bare/detached entries (no branch to key on) are dropped
-  (`worktree_map`, [`src/scanner.rs:303`](../../src/scanner.rs:303)).
+- **git forbids one branch being checked out in two worktrees at once**, so the
+  branch→worktree map is 1:1 and bare/detached entries (no branch to key on) are
+  dropped (`worktree_map`, [`src/scanner.rs:303`](../../src/scanner.rs:303)).
 
 ## Decisions
 
@@ -292,10 +297,12 @@ suggested for deletion.
   deliberate `loops clean` that runs the suggested commands (with guards) is
   out of scope and deferred to a future, explicit feature.
 - **PERF: common-dir resolved twice per repo.** `git_common_dir` runs once in
-  dedup and again in `open_loops`; the cost is one extra git call per repo per
-  scan, an accepted trade-off for keeping the public signatures stable
-  ([`src/scanner.rs:237`](../../src/scanner.rs:237)). The SQLite index mitigates
-  it on warm scans (see [06-cache-index](06-cache-index.md)).
+  dedup and again in `open_loops`
+  ([`src/scanner.rs:460`](../../src/scanner.rs:460)); the cost is one extra git
+  call per repo per scan, an accepted trade-off for keeping the public signatures
+  stable (the `PERF-1` note at [`src/scanner.rs:237`](../../src/scanner.rs:237)).
+  The SQLite index mitigates it on warm scans (see
+  [06-cache-index](06-cache-index.md)).
 
 ## References
 
