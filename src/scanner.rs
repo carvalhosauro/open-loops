@@ -6,6 +6,7 @@ use chrono::{DateTime, Utc};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+use crate::index::Index;
 use crate::inventory::{self, InventoryFile, InventoryStore, LoopMemo};
 
 /// Inventory update produced by one `open_loops` call: `(common-dir hash, file)`.
@@ -240,19 +241,52 @@ pub fn worktree_map(repo: &Path) -> Result<std::collections::HashMap<String, Pat
 /// Walks roots up to `scan_depth` looking for git repo candidates, then
 /// deduplicates by absolute `--git-common-dir`.
 pub fn find_repos(roots: &[PathBuf], scan_depth: usize) -> (Vec<RepoCandidate>, Vec<String>) {
+    find_repos_cached(roots, scan_depth, None)
+}
+
+/// Like [`find_repos`] but optionally consults `index` to skip `git rev-parse`
+/// for already-known paths (resolves #17).
+pub fn find_repos_cached(
+    roots: &[PathBuf],
+    scan_depth: usize,
+    index: Option<&Index>,
+) -> (Vec<RepoCandidate>, Vec<String>) {
     let mut candidates = Vec::new();
     for root in roots {
         walk(root, 0, scan_depth, &mut candidates);
     }
-    dedup_candidates(candidates)
+    dedup_candidates_cached(candidates, index)
 }
 
-fn dedup_candidates(candidates: Vec<PathBuf>) -> (Vec<RepoCandidate>, Vec<String>) {
+/// Like `dedup_candidates` but optionally uses `index` to cache/reuse
+/// `--git-common-dir` results, skipping the git shell-out on cache hits.
+fn dedup_candidates_cached(
+    candidates: Vec<PathBuf>,
+    index: Option<&Index>,
+) -> (Vec<RepoCandidate>, Vec<String>) {
     use std::collections::HashMap;
     let mut by_common: HashMap<PathBuf, RepoCandidate> = HashMap::new();
     let mut warnings = Vec::new();
     for candidate in candidates {
-        match git_common_dir(&candidate) {
+        // Try index cache first (hit = skip shell-out).
+        let cached = index.and_then(|idx| idx.cached_common_dir(&candidate));
+        let common_result = if let Some((_hash, common_dir)) = cached {
+            Ok(common_dir)
+        } else {
+            // Cache miss: call git and store the result back.
+            match git_common_dir(&candidate) {
+                Ok(common) => {
+                    if let Some(idx) = index {
+                        let hash = crate::inventory::common_dir_hash(&common);
+                        idx.put_repo_common_dir(&candidate, &hash, &common);
+                    }
+                    Ok(common)
+                }
+                Err(e) => Err(e),
+            }
+        };
+
+        match common_result {
             Ok(common) => {
                 let repo_name = repo_name_from_common_dir(&common);
                 by_common.entry(common).or_insert(RepoCandidate {
@@ -588,6 +622,7 @@ pub fn commit_window(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::index::Index;
     use crate::testutil;
 
     /// Helper: call `open_loops` without inventory, returning only the loops vec.
@@ -1155,5 +1190,94 @@ bare
                 "common_dir={common}"
             );
         }
+    }
+
+    // -----------------------------------------------------------------------
+    // Task 2: cached find_repos / dedup tests
+    // -----------------------------------------------------------------------
+
+    /// (a) find_repos_cached with a fresh in-memory index populates repos.common_dir.
+    #[test]
+    fn find_repos_cached_populates_index() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path().join("app");
+        testutil::init_repo(&repo);
+
+        let index = Index::open_in_memory();
+        let (repos, warnings) = find_repos_cached(&[tmp.path().to_path_buf()], 4, Some(&index));
+
+        assert!(warnings.is_empty(), "unexpected warnings: {warnings:?}");
+        assert_eq!(repos.len(), 1);
+
+        // The index must now have an entry for this path.
+        let (hash, cd) = index
+            .cached_common_dir(&repo)
+            .expect("index should have cached the common_dir after find_repos_cached");
+        assert!(!hash.is_empty());
+        assert!(
+            cd.ends_with(".git"),
+            "common_dir should end with .git, got: {cd:?}"
+        );
+    }
+
+    /// (b) Second dedup_candidates_cached call reads from cache (SENTINEL proves
+    ///     git_common_dir was NOT called again).
+    ///
+    /// We pre-seed the index with a fake/sentinel common_dir_hash for the repo
+    /// path. If the cache is consulted, we get the sentinel back; if git is
+    /// called instead, we get the real hash — different values prove the path
+    /// taken.
+    #[test]
+    fn dedup_candidates_cached_uses_index_on_second_call() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path().join("app");
+        testutil::init_repo(&repo);
+
+        let index = Index::open_in_memory();
+
+        // Pre-seed the index with a SENTINEL hash and a real-looking common_dir
+        // so dedup can still build a RepoCandidate (repo_name_from_common_dir
+        // only needs the path shape, not a real dir).
+        let sentinel_hash = "sentinel_hash_no_git";
+        let sentinel_cd = repo.join(".git"); // same shape as reality
+        index.put_repo_common_dir(&repo, sentinel_hash, &sentinel_cd);
+
+        // Now call dedup; it should hit the cache and return the sentinel.
+        let (repos, warnings) = dedup_candidates_cached(vec![repo.clone()], Some(&index));
+
+        assert!(warnings.is_empty(), "unexpected warnings: {warnings:?}");
+        assert_eq!(repos.len(), 1);
+
+        // The cached entry must still be the sentinel (git was not called to overwrite it).
+        let (got_hash, _) = index
+            .cached_common_dir(&repo)
+            .expect("index entry must still exist");
+        assert_eq!(
+            got_hash, sentinel_hash,
+            "sentinel hash changed — git was called instead of using cache"
+        );
+    }
+
+    /// (c) N worktrees of the same repo → 1 RepoCandidate on the cached path.
+    #[test]
+    fn dedup_cached_n_worktrees_yields_one_repo() {
+        let tmp = tempfile::tempdir().unwrap();
+        let container = tmp.path().join("my-app");
+        testutil::init_bare_worktree_container(&container);
+        let dev = container.join("dev");
+        testutil::add_named_worktree(&container, "dev", "dev");
+
+        let index = Index::open_in_memory();
+
+        // Both the container and the dev worktree point to the same common_dir.
+        let candidates = vec![container.clone(), dev.clone()];
+        let (repos, warnings) = dedup_candidates_cached(candidates, Some(&index));
+
+        assert!(warnings.is_empty(), "unexpected warnings: {warnings:?}");
+        assert_eq!(
+            repos.len(),
+            1,
+            "N worktrees must dedup to 1 repo, got: {repos:?}"
+        );
     }
 }

@@ -9,7 +9,7 @@
 //! in later tasks wire read/write logic on top of the tables created here.
 
 use rusqlite::{Connection, OpenFlags};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 /// SQLite-backed cache index.
 ///
@@ -64,6 +64,50 @@ impl Index {
             .run_migrations()
             .expect("in-memory migration must succeed");
         index
+    }
+
+    // -------------------------------------------------------------------------
+    // Public cache accessors (Task 2)
+    // -------------------------------------------------------------------------
+
+    /// Returns `(common_dir_hash, common_dir)` cached for `path`, or `None` on
+    /// miss or any index error.
+    pub fn cached_common_dir(&self, path: &Path) -> Option<(String, PathBuf)> {
+        let path_str = path.to_string_lossy();
+        match self.conn.query_row(
+            "SELECT common_dir_hash, common_dir FROM repos WHERE path = ?1",
+            rusqlite::params![path_str.as_ref()],
+            |row| {
+                let hash: String = row.get(0)?;
+                let cd: String = row.get(1)?;
+                Ok((hash, PathBuf::from(cd)))
+            },
+        ) {
+            Ok(pair) => Some(pair),
+            Err(rusqlite::Error::QueryReturnedNoRows) => None,
+            Err(e) => {
+                eprintln!("warning: index cached_common_dir query failed: {e:#}");
+                None
+            }
+        }
+    }
+
+    /// Upserts `(path, common_dir_hash, common_dir)` into `repos`, leaving
+    /// the remaining columns (default_branch, default_sha, refs_fingerprint,
+    /// last_indexed) NULL. On any index error, prints a warning and continues.
+    pub fn put_repo_common_dir(&self, path: &Path, common_dir_hash: &str, common_dir: &Path) {
+        let path_str = path.to_string_lossy();
+        let cd_str = common_dir.to_string_lossy();
+        if let Err(e) = self.conn.execute(
+            "INSERT INTO repos (common_dir_hash, path, common_dir)
+             VALUES (?1, ?2, ?3)
+             ON CONFLICT(path) DO UPDATE SET
+                 common_dir_hash = excluded.common_dir_hash,
+                 common_dir      = excluded.common_dir",
+            rusqlite::params![common_dir_hash, path_str.as_ref(), cd_str.as_ref()],
+        ) {
+            eprintln!("warning: index put_repo_common_dir failed: {e:#}");
+        }
     }
 
     // -------------------------------------------------------------------------
@@ -299,5 +343,41 @@ mod tests {
             "in-memory index missing tables: {tables:?}"
         );
         assert_eq!(user_version(&index.conn), 1);
+    }
+
+    // -----------------------------------------------------------------------
+    // (e) cached_common_dir / put_repo_common_dir round-trip
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn put_then_get_common_dir() {
+        let index = Index::open_in_memory();
+        let path = std::path::Path::new("/home/u/project");
+        let common_dir = std::path::Path::new("/home/u/project/.git");
+        let hash = "aabbccddeeff0011";
+
+        // Miss before insert.
+        assert!(index.cached_common_dir(path).is_none());
+
+        index.put_repo_common_dir(path, hash, common_dir);
+
+        let (got_hash, got_cd) = index.cached_common_dir(path).expect("should hit after put");
+        assert_eq!(got_hash, hash);
+        assert_eq!(got_cd, common_dir);
+    }
+
+    #[test]
+    fn put_is_idempotent_upsert() {
+        let index = Index::open_in_memory();
+        let path = std::path::Path::new("/home/u/project");
+        let cd1 = std::path::Path::new("/home/u/project/.git");
+        let cd2 = std::path::Path::new("/home/u/project/.bare");
+
+        index.put_repo_common_dir(path, "hash1", cd1);
+        index.put_repo_common_dir(path, "hash2", cd2);
+
+        let (h, cd) = index.cached_common_dir(path).unwrap();
+        assert_eq!(h, "hash2");
+        assert_eq!(cd, cd2);
     }
 }
