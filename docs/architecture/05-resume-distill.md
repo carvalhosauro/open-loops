@@ -10,8 +10,10 @@
 This domain answers the last two of the three questions `open-loops` exists for —
 *where did I leave off, and what is the next step?* — for one chosen open loop.
 It consumes the **evidence snapshot** assembled by
-[04-inventory-evidence](04-inventory-evidence.md) (`ResumeEvidence`: commits,
-diffstat, matched session excerpts, and a confidence score) and turns it into the
+[04-inventory-evidence](04-inventory-evidence.md) — the default branch, the
+commit list, the diffstat, the matched session excerpts, and a confidence score
+(carried in `cli.rs`'s private `ResumeEvidence` struct, an implementation detail
+of the caller, not a distill-domain public type) — and turns it into the
 **resume context**: a short, human-facing markdown document with `## Why`,
 `## Done`, `## Remaining`, and `## Next step` sections, an audit-trail
 `## Sources` section, and a confidence line at the top.
@@ -35,8 +37,10 @@ instant, and `--dry-run` skips the LLM entirely.
 | [`src/distill.rs`](../../src/distill.rs:1) | The whole domain: prompt construction (`build_prompt`), the LLM invocation via the configured command (`run_llm`), the confidence model (`Confidence`, `compute_confidence`), the `## Sources` append (`with_sources`), and the `--dry-run` formatter (`format_dry_run`). |
 | [`src/cli.rs`](../../src/cli.rs:292) (orchestration) | `run_resume` is the caller: it resolves the loop, checks the cache, gathers the evidence snapshot, and threads it through `build_prompt` → `run_llm` → `with_sources`, or short-circuits to `format_dry_run`. |
 
-The evidence that feeds this domain — the `ResumeEvidence` struct and its
-assembly in `gather_resume_evidence` — is owned by
+The evidence that feeds this domain — the default branch, commits, diffstat,
+session excerpts, and confidence score, assembled in `gather_resume_evidence`
+into the private `ResumeEvidence` struct local to `cli.rs` (an implementation
+detail of the caller, not domain API) — is owned and documented by
 [04-inventory-evidence](04-inventory-evidence.md); the session excerpts embedded
 in the prompt are `SessionExcerpt` values owned by
 [02-sessions-attribution](02-sessions-attribution.md); the `llm_command` config
@@ -189,9 +193,12 @@ excerpts, confidence)`** ([`src/distill.rs:198`](../../src/distill.rs:198)).
 Renders the evidence snapshot itself: the confidence line, a `## Git` block
 (branch, short HEAD sha, base, ahead/behind), the commit list, the diffstat, and a
 `## AI sessions` block listing each excerpt with its match tags (`in commit
-window`, `mentions branch`, or `matched by heuristic`), closing with
-`--- Dry run — LLM not invoked.`. It contains none of the LLM-generated `##`
-sections — by design, it is the auditable *input*, not the distilled output.
+window`, `mentions branch`, or `matched by heuristic`), closing with a `---`
+rule on its own line followed by the verbatim footer
+`Dry run — LLM not invoked. Run without `--dry-run` to distill.`
+([`src/distill.rs:237`](../../src/distill.rs:237)). It contains none of the
+LLM-generated `##` sections — by design, it is the auditable *input*, not the
+distilled output.
 
 The user-facing surface — the `loops resume <query> [--dry-run] [--fresh]`
 command, the output sections, and the confidence table — is documented in
@@ -220,7 +227,10 @@ command, the output sections, and the confidence table — is documented in
   before any cache lookup or LLM call ([`src/cli.rs:296`](../../src/cli.rs:296)).
   This is the audit path: it shows exactly the commits, diffstat, and session
   excerpts that *would* feed the model, so the heuristic match can be inspected
-  before trusting a distillation.
+  before trusting a distillation. The output ends with a `---` rule on its own
+  line followed by the verbatim footer
+  `Dry run — LLM not invoked. Run without `--dry-run` to distill.`
+  ([`src/distill.rs:237`](../../src/distill.rs:237)).
 - **A cache hit skips the LLM entirely.** Before building the prompt, `run_resume`
   checks the distillation cache keyed by HEAD sha and prints the stored resume
   context on a hit ([`src/cli.rs:311`](../../src/cli.rs:311)). A new commit changes
@@ -339,8 +349,10 @@ Tests worth reading (all in [`src/distill.rs`](../../src/distill.rs:241)):
 `with_sources_short_sha_when_head_sha_under_7_chars`.
 
 Sibling architecture docs: [00-overview](00-overview.md) ·
-[02-sessions-attribution](02-sessions-attribution.md) (the `SessionExcerpt`s
-embedded in the prompt) · [04-inventory-evidence](04-inventory-evidence.md)
+[01-discovery](01-discovery.md) (the git half of ex-ADR-0002: shell-out to the
+`git` binary) · [02-sessions-attribution](02-sessions-attribution.md) (the
+`SessionExcerpt`s embedded in the prompt) ·
+[04-inventory-evidence](04-inventory-evidence.md)
 (produces the evidence snapshot this domain consumes) ·
 [06-cache-index](06-cache-index.md) (the distillation cache keyed by HEAD sha) ·
 [07-config-state](07-config-state.md) (the `llm_command` config field) ·
