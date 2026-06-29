@@ -16,12 +16,20 @@ Discovery is layout-agnostic: normal repos, worktrees, and bare stores under you
 configured roots are found automatically. Repo names come from git's common-dir,
 not from worktree folder names.
 
-Ahead/behind counts are memoised in `~/.open-loops/inventory/` by
-`(branch, head_sha, default_sha)`. Repeated runs skip `rev-list` for unchanged
-branches, making the second call noticeably faster on large repos.
+Scan results are cached in a disposable SQLite index at `~/.open-loops/index.db`.
+When a repo's refs are unchanged since the last run, the cached loops are served
+and the heavy git phase (`for-each-ref`, `branch --merged`, per-branch
+`rev-list`) is skipped — so the second call is noticeably faster on large
+many-branch repos. Ahead/behind counts are also memoised in
+`~/.open-loops/inventory/` by `(branch, head_sha, default_sha)`.
+
+**Git is always the source of truth; the index is a throwaway cache.** It is
+safe to delete `~/.open-loops/index.db` at any time — the next run rebuilds it.
+A corrupt index self-heals (it is rebuilt from git, with a one-line warning) and
+never aborts a command.
 
 ```bash
-loops --fresh             # bypass memo and recompute all ahead/behind
+loops --fresh             # bypass the cache and recompute all ahead/behind
 ```
 
 ### Filtering
@@ -62,10 +70,11 @@ loops refresh             # reindex all repos
 loops refresh api         # reindex repos matching "api"
 ```
 
-Forces a full recomputation of ahead/behind for all (or filtered) repos, writes
-the updated inventory, and removes files for repos that have been deleted or
-moved (`~/.open-loops/inventory/<hash>.json`). Prints `refreshed N repos` on
-stderr when complete.
+Forces a full recomputation of ahead/behind for all (or filtered) repos and
+rebuilds the SQLite index rows for them. It also prunes both stores' orphans —
+the inventory files (`~/.open-loops/inventory/<hash>.json`) and the index rows
+(`~/.open-loops/index.db`) for repos that have been deleted or moved off disk.
+Prints `refreshed N repos` on stderr when complete.
 
 ## `loops resume <query>` — context resumption
 
