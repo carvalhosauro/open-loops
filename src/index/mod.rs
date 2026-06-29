@@ -333,6 +333,130 @@ impl Index {
     }
 
     // -------------------------------------------------------------------------
+    // Public session accessors (Task 4): FTS index for mention probe
+    // -------------------------------------------------------------------------
+
+    /// Upserts a session's bounded tail text into the `sessions` table and the
+    /// `sessions_fts` virtual table.
+    ///
+    /// Reindexes ONLY when the stored `(path, mtime)` row differs from the
+    /// supplied values. Unchanged files are skipped (no I/O, no FTS write).
+    /// On any index error, prints a warning and continues.
+    pub fn upsert_session(&self, path: &Path, repo_path: &Path, mtime: i64, size: i64, text: &str) {
+        if let Err(e) = self.upsert_session_inner(path, repo_path, mtime, size, text) {
+            eprintln!("warning: index upsert_session failed: {e:#}");
+        }
+    }
+
+    fn upsert_session_inner(
+        &self,
+        path: &Path,
+        repo_path: &Path,
+        mtime: i64,
+        size: i64,
+        text: &str,
+    ) -> Result<(), rusqlite::Error> {
+        let path_str = path.to_string_lossy();
+        let repo_str = repo_path.to_string_lossy();
+
+        // Check whether a row with the same (path, mtime) already exists.
+        // Also retrieve the rowid so we can delete the old FTS entry by rowid.
+        let existing: Option<(i64, i64)> = match self.conn.query_row(
+            "SELECT rowid, mtime FROM sessions WHERE path = ?1",
+            rusqlite::params![path_str.as_ref()],
+            |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)),
+        ) {
+            Ok(pair) => Some(pair),
+            Err(rusqlite::Error::QueryReturnedNoRows) => None,
+            Err(e) => return Err(e),
+        };
+
+        if existing.map(|(_, m)| m) == Some(mtime) {
+            // Nothing changed — skip reindex.
+            return Ok(());
+        }
+
+        // If a previous row exists, remove the old FTS entry by rowid.
+        if let Some((old_rowid, _)) = existing {
+            self.conn.execute(
+                "DELETE FROM sessions_fts WHERE rowid = ?1",
+                rusqlite::params![old_rowid],
+            )?;
+        }
+
+        // Upsert the metadata row.
+        self.conn.execute(
+            "INSERT INTO sessions (path, repo_path, mtime, size)
+             VALUES (?1, ?2, ?3, ?4)
+             ON CONFLICT(path) DO UPDATE SET
+                 repo_path = excluded.repo_path,
+                 mtime     = excluded.mtime,
+                 size      = excluded.size",
+            rusqlite::params![path_str.as_ref(), repo_str.as_ref(), mtime, size,],
+        )?;
+
+        // Get the rowid of the upserted sessions row so we can link it to FTS.
+        let sessions_rowid: i64 = self.conn.query_row(
+            "SELECT rowid FROM sessions WHERE path = ?1",
+            rusqlite::params![path_str.as_ref()],
+            |row| row.get(0),
+        )?;
+
+        // Insert the new FTS row with the same rowid as the sessions row.
+        // This lets us join sessions_fts.rowid = sessions.rowid in queries.
+        self.conn.execute(
+            "INSERT INTO sessions_fts (rowid, text) VALUES (?1, ?2)",
+            rusqlite::params![sessions_rowid, text],
+        )?;
+
+        Ok(())
+    }
+
+    /// Returns the set of session file paths (scoped to `repo_path`) whose
+    /// indexed text matches `branch` via FTS5.
+    ///
+    /// No file reads. On any index error, returns an empty set.
+    pub fn session_mentions(
+        &self,
+        repo_path: &Path,
+        branch: &str,
+    ) -> std::collections::HashSet<PathBuf> {
+        match self.session_mentions_inner(repo_path, branch) {
+            Ok(set) => set,
+            Err(e) => {
+                eprintln!("warning: index session_mentions failed: {e:#}");
+                std::collections::HashSet::new()
+            }
+        }
+    }
+
+    fn session_mentions_inner(
+        &self,
+        repo_path: &Path,
+        branch: &str,
+    ) -> Result<std::collections::HashSet<PathBuf>, rusqlite::Error> {
+        let repo_str = repo_path.to_string_lossy();
+        // Wrap in double-quotes for FTS5 phrase/literal match.
+        // Double any embedded double-quotes to escape them.
+        let fts_query = format!("\"{}\"", branch.replace('"', "\"\""));
+
+        // Join sessions_fts to sessions via rowid (FTS5 always exposes rowid).
+        // The path UNINDEXED column in sessions_fts is not readable via SELECT
+        // on a contentless (content='') table — use the rowid join instead.
+        let mut stmt = self.conn.prepare(
+            "SELECT s.path FROM sessions_fts f
+             JOIN sessions s ON s.rowid = f.rowid
+             WHERE sessions_fts MATCH ?1
+               AND s.repo_path = ?2",
+        )?;
+        let paths = stmt.query_map(rusqlite::params![fts_query, repo_str.as_ref()], |row| {
+            let p: String = row.get(0)?;
+            Ok(PathBuf::from(p))
+        })?;
+        paths.collect::<Result<std::collections::HashSet<_>, _>>()
+    }
+
+    // -------------------------------------------------------------------------
     // Internal helpers
     // -------------------------------------------------------------------------
 
@@ -802,5 +926,22 @@ mod tests {
         let got = index.cached_loops(hash, 1, &default_sha).unwrap();
         assert_eq!(got[0].ahead, None);
         assert_eq!(got[0].behind, None);
+    }
+
+    // -----------------------------------------------------------------------
+    // Task 4: upsert_session / session_mentions
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn upsert_and_session_mentions_basic() {
+        let index = Index::open_in_memory();
+        let path = std::path::Path::new("/fake/sess.jsonl");
+        let repo = std::path::Path::new("/home/g/app");
+        index.upsert_session(path, repo, 12345, 100, "[user] working on feat/login");
+        let mentions = index.session_mentions(repo, "feat/login");
+        assert!(
+            mentions.contains(&path.to_path_buf()),
+            "FTS must find the session"
+        );
     }
 }
