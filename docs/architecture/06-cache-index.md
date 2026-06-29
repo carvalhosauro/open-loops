@@ -189,7 +189,7 @@ SQLite error degrades to a clean miss or a no-op write, prints a one-line
 | `Index::open_in_memory()` ([`src/index/mod.rs:73`](../../src/index/mod.rs:73)) | Same migration in `:memory:` for tests and as the disk-failure fallback. |
 | `cached_common_dir(path)` ([`src/index/mod.rs:92`](../../src/index/mod.rs:92)) | `(common_dir_hash, common_dir)` for a known scanned `path`, or `None` on miss/error. |
 | `put_repo_common_dir(path, hash, common_dir)` ([`src/index/mod.rs:115`](../../src/index/mod.rs:115)) | Upserts the `repos` row's common-dir columns, leaving the gate columns NULL (filled later by `put_loops`). |
-| `cached_loops(hash, refs_fp, default_sha)` ([`src/index/mod.rs:144`](../../src/index/mod.rs:144)) | Returns the cached `LoopRow`s **only** when the stored `refs_fingerprint == refs_fp` **and** `default_sha == default_sha`. A NULL-gate (un-populated) repo row is a clean, warning-free miss. |
+| `cached_loops(hash, refs_fp, default_sha)` ([`src/index/mod.rs:144`](../../src/index/mod.rs:144)) | Returns the cached `LoopRow`s **only** when the stored `refs_fingerprint == refs_fp` (supplied) **and** the stored `default_sha == default_sha` (supplied) — the two-part gate compares each STORED value against the value the caller passes in. A NULL-gate (un-populated) repo row is a clean, warning-free miss. |
 | `put_loops(hash, path, common_dir, default_branch, default_sha, refs_fp, rows)` ([`src/index/mod.rs:229`](../../src/index/mod.rs:229)) | Write-through for one repo: upsert the `repos` gate columns and **REPLACE** the repo's `loops` rows (delete + re-insert) in a single transaction. |
 | `upsert_session(path, repo_path, mtime, size, text)` ([`src/index/mod.rs:347`](../../src/index/mod.rs:347)) | Indexes a session's bounded tail. Reindexes only when the stored `(mtime, size)` differs — comparing `size` alongside `mtime` closes the same-second append window. |
 | `session_mentions(repo_path, branch)` ([`src/index/mod.rs:431`](../../src/index/mod.rs:431)) | The set of session paths (scoped to `repo_path`) whose indexed tail matches `branch` via FTS5. No file reads; empty set on any error. |
@@ -197,7 +197,10 @@ SQLite error degrades to a clean miss or a no-op write, prints a one-line
 
 **Schema (`user_version = 2`).** Four tables, created atomically by
 `create_schema_v1` ([`src/index/mod.rs:613`](../../src/index/mod.rs:613)) and
-healed to v2 by `migrate_v1_to_v2` ([`src/index/mod.rs:593`](../../src/index/mod.rs:593)):
+healed to v2 by `migrate_v1_to_v2` ([`src/index/mod.rs:593`](../../src/index/mod.rs:593)).
+A fresh database runs both steps and ends at `user_version = 2`
+(`create_schema_v1` sets version 1; `migrate_v1_to_v2` immediately advances it to
+2), so even a brand-new create passes through the "v1→v2" migration:
 
 | Table | Holds | Key |
 |---|---|---|
