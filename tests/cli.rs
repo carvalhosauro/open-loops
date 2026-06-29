@@ -597,6 +597,87 @@ fn inventory_write_through_on_list() {
         .stderr(predicate::str::contains("refreshed 1 repo"));
 }
 
+/// The SQLite index is created live on the first scan and a corrupt/deleted db
+/// self-heals on the next run (git is the source of truth; the index is
+/// disposable). Deleting `index.db` between two runs must be transparent.
+#[test]
+fn index_db_created_and_self_heals_on_deletion() {
+    let tmp = tempfile::tempdir().unwrap();
+    let home = tmp.path().join("home");
+    let projects = tmp.path().join("projects");
+    let repo = projects.join("my-app");
+    std::fs::create_dir_all(&repo).unwrap();
+    git(&repo, &["init", "-b", "main"]);
+    std::fs::write(repo.join("a.txt"), "a").unwrap();
+    git(&repo, &["add", "."]);
+    git(&repo, &["commit", "-m", "init"]);
+    git(&repo, &["checkout", "-b", "feat/heal"]);
+    std::fs::write(repo.join("b.txt"), "b").unwrap();
+    git(&repo, &["add", "."]);
+    git(&repo, &["commit", "-m", "feat"]);
+
+    loops(&home).arg("init").arg(&projects).assert().success();
+
+    // First scan: the index db must be created live.
+    loops(&home)
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("my-app/feat/heal"));
+    let db_path = home.join("index.db");
+    assert!(
+        db_path.exists(),
+        "index.db must be created on the first scan"
+    );
+
+    // Corrupt then delete the db — the next run must rebuild it transparently and
+    // still list the loop (no error, exit 0).
+    std::fs::write(&db_path, b"not a sqlite database").unwrap();
+    loops(&home)
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("my-app/feat/heal"));
+    assert!(db_path.exists(), "corrupt index.db must be rebuilt");
+
+    std::fs::remove_file(&db_path).unwrap();
+    loops(&home)
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("my-app/feat/heal"));
+    assert!(db_path.exists(), "deleted index.db must self-heal");
+}
+
+/// `loops refresh` reclaims index rows for a repo gone from disk, mirroring the
+/// inventory orphan prune. A live repo's rows must survive.
+#[test]
+fn refresh_prunes_index_rows_for_disk_gone_repo() {
+    let tmp = tempfile::tempdir().unwrap();
+    let home = tmp.path().join("home");
+    let projects = tmp.path().join("projects");
+    repo_with_feature(&projects, "keep-me");
+    repo_with_feature(&projects, "delete-me");
+
+    loops(&home).arg("init").arg(&projects).assert().success();
+    loops(&home).assert().success();
+
+    // Both repos must be indexed.
+    let count = |home: &Path| -> i64 {
+        let conn =
+            rusqlite::Connection::open(home.join("index.db")).expect("open index for assertion");
+        conn.query_row("SELECT COUNT(*) FROM repos", [], |r| r.get(0))
+            .unwrap()
+    };
+    assert_eq!(count(&home), 2, "both repos indexed after first scan");
+
+    // delete-me disappears from disk; refresh must reclaim its index row.
+    std::fs::remove_dir_all(projects.join("delete-me")).unwrap();
+    loops(&home)
+        .arg("refresh")
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("removed orphan index entry"));
+    assert_eq!(count(&home), 1, "disk-gone repo's index row must be pruned");
+}
+
 #[test]
 fn scoped_refresh_does_not_prune_other_inventory() {
     let tmp = tempfile::tempdir().unwrap();
@@ -796,8 +877,11 @@ fn cache_hit_serves_memo_and_fresh_recomputes() {
     loops(&home).arg("init").arg(&projects).assert().success();
     loops(&home).assert().success();
 
-    // Poison the cached ahead count, preserving the SHA keys so the memo still
-    // validates and gets served.
+    // The SQLite index gate is now the authoritative warm cache: on a second scan
+    // with unchanged refs it serves the cached loops and the heavy git phase
+    // (incl. the JSON inventory memo) never runs. So poison the cached `ahead` in
+    // BOTH the SQLite index and the JSON inventory, preserving each store's
+    // validation keys so the warm cache still validates and gets served.
     let inv_dir = home.join("inventory");
     let inv_file = std::fs::read_dir(&inv_dir)
         .unwrap()
@@ -810,14 +894,24 @@ fn cache_hit_serves_memo_and_fresh_recomputes() {
     json["loops"][0]["ahead"] = serde_json::json!(99);
     std::fs::write(&inv_file, serde_json::to_string(&json).unwrap()).unwrap();
 
-    // Warm scan serves the poisoned memo → ahead:99 matches.
+    // Poison the SQLite gate's cached ahead, leaving refs_fingerprint/default_sha
+    // intact so the gate still hits on the warm scan.
+    {
+        let conn = rusqlite::Connection::open(home.join("index.db")).expect("open index to poison");
+        let n = conn
+            .execute("UPDATE loops SET ahead = 99", [])
+            .expect("poison sqlite ahead");
+        assert_eq!(n, 1, "exactly one cached loop row to poison");
+    }
+
+    // Warm scan serves the poisoned cache → ahead:99 matches.
     loops(&home)
         .arg("ahead:99")
         .assert()
         .success()
         .stdout(predicate::str::contains("feat/x"));
 
-    // --fresh ignores the memo and recomputes ahead=1 → ahead:99 matches nothing.
+    // --fresh ignores the caches and recomputes ahead=1 → ahead:99 matches nothing.
     loops(&home)
         .args(["--fresh", "ahead:99"])
         .assert()

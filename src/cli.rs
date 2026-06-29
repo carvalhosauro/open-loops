@@ -6,12 +6,13 @@ pub use cli_command::{Cli, Command};
 use crate::config::Store;
 use crate::distill::Confidence;
 use crate::ignores::Ignores;
+use crate::index::Index;
 use crate::inventory::InventoryStore;
 use crate::scanner::{self, OpenLoop, ScanOptions};
 use crate::state::State;
 use crate::{cache, distill, output, sessions, worktrees};
 use anyhow::{bail, ensure, Result};
-use sessions::{SessionExcerpt, SessionSource};
+use sessions::SessionExcerpt;
 use std::path::{Path, PathBuf};
 
 struct ResumeEvidence {
@@ -77,6 +78,7 @@ fn write_inventory(
 /// updates. Prints scan warnings to stderr. The caller may filter `inv_updates`
 /// before writing (as in `run_refresh`) or write them directly (as in `resolve_loop`
 /// and `run_list`).
+#[allow(clippy::too_many_arguments)]
 fn scan_with_inventory(
     base: &Path,
     cfg: &crate::config::Config,
@@ -85,6 +87,7 @@ fn scan_with_inventory(
     labels: &[(PathBuf, String)],
     need_ahead_behind: bool,
     fresh: bool,
+    index: Option<&Index>,
 ) -> Result<ScanResult> {
     let inv_store = InventoryStore::new(base);
     let opts = ScanOptions {
@@ -93,12 +96,13 @@ fn scan_with_inventory(
         inventory_dir: Some(inv_store.dir.clone()),
         inventory_ttl_secs: cfg.inventory_ttl_secs,
     };
-    let (found, warnings, inv_updates) = scanner::scan(
+    let (found, warnings, inv_updates) = scanner::scan_indexed(
         roots,
         labels,
         cfg.scan_depth,
         &opts,
         plan.repo_filters.first().map(|s| s.as_str()),
+        index,
     );
     for w in &warnings {
         eprintln!("warning: {w}");
@@ -118,6 +122,10 @@ fn resolve_loop(base: &Path, query: &str, fresh: bool) -> Result<OpenLoop> {
     let labels = cfg.resolve_labels()?;
     let roots = cfg.resolve_scan_roots(&plan)?;
     let inv_store = InventoryStore::new(base);
+    // Open the disposable SQLite index once per command. `Index::open` is
+    // tolerant: a corrupt/unopenable db self-heals (rebuild or in-memory
+    // fallback), so this never aborts the command.
+    let index = Index::open(base);
     let (found, inv_updates) = scan_with_inventory(
         base,
         &cfg,
@@ -126,6 +134,7 @@ fn resolve_loop(base: &Path, query: &str, fresh: bool) -> Result<OpenLoop> {
         &labels,
         plan.need_ahead_behind,
         fresh,
+        Some(&index),
     )?;
     write_inventory(&inv_store, inv_updates);
     let now = chrono::Utc::now();
@@ -172,12 +181,17 @@ fn gather_resume_evidence(base: &Path, lp: &OpenLoop) -> Result<ResumeEvidence> 
     let source = sessions::claude_code::ClaudeCode {
         projects_dir: cfg.sessions_dir.clone(),
     };
-    let excerpts = source.excerpts(
+    // Open the disposable index and run the FTS-accelerated mention probe (#14).
+    // `Index::open` is tolerant, and `excerpts_indexed` degrades to the in-memory
+    // file probe on any index error — so this never aborts resume.
+    let index = Index::open(base);
+    let excerpts = source.excerpts_indexed(
         &lp.repo_path,
         &lp.branch,
         window,
         cfg.max_sessions,
         cfg.max_session_kb,
+        Some(&index),
     )?;
     let confidence = distill::compute_confidence(&excerpts);
     Ok(ResumeEvidence {
@@ -202,9 +216,16 @@ pub fn run_list(base: &Path, query: &str, fresh: bool) -> Result<()> {
     let roots = cfg.resolve_scan_roots(&plan)?;
     progress("scanning git repositories…");
     let inv_store = InventoryStore::new(base);
+    let index = Index::open(base);
     let (found, inv_updates) = scan_with_inventory(
-        base, &cfg, &plan, &roots, &labels, true, // need_ahead_behind
+        base,
+        &cfg,
+        &plan,
+        &roots,
+        &labels,
+        true, // need_ahead_behind
         fresh,
+        Some(&index),
     )?;
     write_inventory(&inv_store, inv_updates);
     let ignores = Ignores::load(base)?;
@@ -314,9 +335,18 @@ pub fn run_refresh(base: &Path, query: &str) -> Result<()> {
     let roots = cfg.resolve_scan_roots(&plan)?;
     progress("scanning git repositories…");
     let inv_store = InventoryStore::new(base);
+    // `fresh: true` bypasses the gate but still writes through, so the index's
+    // `loops`/`repos` rows are rebuilt for the scoped repos on this scan.
+    let index = Index::open(base);
     let (found, inv_updates) = scan_with_inventory(
-        base, &cfg, &plan, &roots, &labels, true, // need_ahead_behind
+        base,
+        &cfg,
+        &plan,
+        &roots,
+        &labels,
+        true, // need_ahead_behind
         true, // fresh: refresh always recomputes — ignores any cached memo
+        Some(&index),
     )?;
 
     // Scope the reindex to the loops the query would actually list. `repo:`/`root:`
@@ -363,6 +393,9 @@ pub fn run_refresh(base: &Path, query: &str) -> Result<()> {
     let n = scoped.len();
     write_inventory(&inv_store, scoped);
     inv_store.prune_orphans()?;
+    // Reclaim index rows for repos gone from disk (same orphan semantics as the
+    // inventory prune above). Tolerant: a failure here never aborts refresh.
+    index.prune_missing_repos();
     let noun = if n == 1 { "repo" } else { "repos" };
     eprintln!("refreshed {n} {noun}");
     Ok(())

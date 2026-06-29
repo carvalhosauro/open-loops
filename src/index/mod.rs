@@ -457,6 +457,62 @@ impl Index {
     }
 
     // -------------------------------------------------------------------------
+    // Public maintenance (Task 5): prune orphans
+    // -------------------------------------------------------------------------
+
+    /// Deletes `repos` rows (and their dependent `loops` rows) whose repo is gone
+    /// from disk, mirroring `inventory::prune_orphans`.
+    ///
+    /// A repo is an orphan only when BOTH its scanned `path` and its `common_dir`
+    /// no longer exist: a worktree directory may be removed while the shared bare
+    /// store under `common_dir` survives (its branches are still real), so we must
+    /// keep the row in that case. Removal is self-healing — a returning repo is
+    /// simply re-discovered and re-indexed on the next scan.
+    ///
+    /// On any index error, prints a warning and continues (git is the source of
+    /// truth; the index is disposable).
+    pub fn prune_missing_repos(&self) {
+        if let Err(e) = self.prune_missing_repos_inner() {
+            eprintln!("warning: index prune_missing_repos failed: {e:#}");
+        }
+    }
+
+    fn prune_missing_repos_inner(&self) -> Result<(), rusqlite::Error> {
+        // Collect candidate rows first so we don't mutate while iterating a stmt.
+        let rows: Vec<(String, String, String)> = {
+            let mut stmt = self
+                .conn
+                .prepare("SELECT common_dir_hash, path, common_dir FROM repos")?;
+            let mapped = stmt.query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                ))
+            })?;
+            mapped.collect::<Result<Vec<_>, _>>()?
+        };
+
+        for (hash, path, common_dir) in rows {
+            let path_gone = !Path::new(&path).exists();
+            let common_gone = !Path::new(&common_dir).exists();
+            // Orphan only when the worktree path AND the shared store are both gone.
+            if path_gone && common_gone {
+                self.conn.execute(
+                    "DELETE FROM loops WHERE common_dir_hash = ?1",
+                    rusqlite::params![hash],
+                )?;
+                self.conn.execute(
+                    "DELETE FROM repos WHERE common_dir_hash = ?1",
+                    rusqlite::params![hash],
+                )?;
+                eprintln!("warning: removed orphan index entry for {path}");
+            }
+        }
+        Ok(())
+    }
+
+    // -------------------------------------------------------------------------
     // Internal helpers
     // -------------------------------------------------------------------------
 
@@ -931,6 +987,110 @@ mod tests {
     // -----------------------------------------------------------------------
     // Task 4: upsert_session / session_mentions
     // -----------------------------------------------------------------------
+
+    // -----------------------------------------------------------------------
+    // Task 5: prune_missing_repos
+    // -----------------------------------------------------------------------
+
+    fn repos_count(index: &Index) -> i64 {
+        index
+            .conn
+            .query_row("SELECT COUNT(*) FROM repos", [], |r| r.get(0))
+            .unwrap()
+    }
+
+    fn loops_count(index: &Index, hash: &str) -> i64 {
+        index
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM loops WHERE common_dir_hash = ?1",
+                rusqlite::params![hash],
+                |r| r.get(0),
+            )
+            .unwrap()
+    }
+
+    #[test]
+    fn prune_missing_repos_removes_gone_repo_and_keeps_live_one() {
+        // A live repo (its dir exists on disk) must survive; a gone repo (path and
+        // common_dir both absent) must be deleted along with its loops.
+        let tmp = TempDir::new().unwrap();
+        let live_dir = tmp.path().join("live");
+        let live_common = live_dir.join(".git");
+        std::fs::create_dir_all(&live_common).unwrap();
+
+        let index = Index::open_in_memory();
+        let default_sha = "d".repeat(40);
+
+        // Live repo: real dir on disk.
+        let live_hash = "live000000000000";
+        index.put_loops(
+            live_hash,
+            &live_dir,
+            &live_common,
+            "main",
+            &default_sha,
+            1,
+            &sample_rows(),
+        );
+
+        // Gone repo: paths that do not exist.
+        let gone_hash = "gone000000000000";
+        index.put_loops(
+            gone_hash,
+            std::path::Path::new("/no/such/repo"),
+            std::path::Path::new("/no/such/repo/.git"),
+            "main",
+            &default_sha,
+            1,
+            &sample_rows(),
+        );
+
+        assert_eq!(repos_count(&index), 2);
+        assert_eq!(loops_count(&index, gone_hash), 2);
+
+        index.prune_missing_repos();
+
+        assert_eq!(repos_count(&index), 1, "only the live repo must remain");
+        assert!(
+            index.cached_loops(live_hash, 1, &default_sha).is_some(),
+            "live repo loops must survive prune"
+        );
+        assert_eq!(
+            loops_count(&index, gone_hash),
+            0,
+            "gone repo loops must be deleted"
+        );
+    }
+
+    #[test]
+    fn prune_missing_repos_keeps_repo_when_common_dir_survives() {
+        // A worktree dir removed while the shared common-dir store still exists is
+        // NOT an orphan: its branches are still real, so the row must be kept.
+        let tmp = TempDir::new().unwrap();
+        let common = tmp.path().join("my-app/.bare");
+        std::fs::create_dir_all(&common).unwrap();
+
+        let index = Index::open_in_memory();
+        let hash = "wtstore000000000";
+        index.put_loops(
+            hash,
+            std::path::Path::new("/gone/worktree"), // path gone
+            &common,                                // common_dir survives
+            "main",
+            &"d".repeat(40),
+            1,
+            &sample_rows(),
+        );
+
+        index.prune_missing_repos();
+
+        assert_eq!(
+            repos_count(&index),
+            1,
+            "row must survive while common_dir exists"
+        );
+    }
 
     #[test]
     fn upsert_and_session_mentions_basic() {
