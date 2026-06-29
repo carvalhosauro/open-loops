@@ -6,6 +6,7 @@ pub mod cli;
 pub mod config;
 pub mod distill;
 pub mod ignores;
+pub mod index;
 pub mod inventory;
 pub mod output;
 pub mod query;

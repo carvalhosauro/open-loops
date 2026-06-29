@@ -229,7 +229,7 @@ Adicionar flag global `--verbose` no `struct Cli` (clap). Não quebra subcomando
 
 ### ADR
 
-Atualizar nota em ADR 0002 ou criar ADR 0008: shell-out permanece; **logging
+Atualizar nota em ADR 0002 ou criar ADR 0009: shell-out permanece; **logging
 estruturado** passa a ser suportado (supersedes a decisão "só eprintln" do MVP).
 
 ---
@@ -278,7 +278,7 @@ Settings → Community Standards passa a verde nos três itens.
 
 ### No mapa (registro da decisão)
 
-- **ADR `docs/decisions/0008-typed-errors-tracing.md`** — **novo**, EN. Registra:
+- **ADR `docs/decisions/0009-typed-errors-tracing.md`** — **novo**, EN. Registra:
   (a) lib expõe `thiserror`, binário usa `anyhow`; (b) motivação testes + CI cross-OS;
   (c) `tracing` com `--verbose`/`RUST_LOG`. Liga a este spec.
 
@@ -334,7 +334,7 @@ Settings → Community Standards passa a verde nos três itens.
 - [ ] `tracing` na lib; subscriber em `main.rs`.
 - [ ] Flag global `--verbose` no CLI.
 - [ ] `eprintln!` de progresso/warning migrados para `tracing`.
-- [ ] ADR 0008 criado.
+- [ ] ADR 0009 criado.
 
 ### 4.4 — Community health
 - [ ] `CONTRIBUTING.md`, `CODE_OF_CONDUCT.md`, `SECURITY.md` na raiz.

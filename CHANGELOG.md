@@ -1,6 +1,19 @@
 # Changelog
 ## unreleased
 
+### Features
+- SQLite index at `~/.open-loops/index.db` (disposable cache; git stays the source of truth)
+- Refs-fingerprint gate caches loops so warm scans skip `rev-list`/`for-each-ref` (#13)
+- Cache `git --git-common-dir` per scanned path to skip the dedup `rev-parse` (#17)
+- Probe session branch mentions via a bounded-tail FTS index instead of whole-file reads (#14)
+- Stable session ranking that filters empty sessions before the `max_sessions` cut (#15)
+- `loops refresh` rebuilds the index for scoped repos and prunes rows for repos gone from disk
+- Self-healing index: a corrupt or deleted `index.db` is rebuilt transparently on the next run
+
+### Docs
+- ADR 0008 — SQLite disposable index (schema, refs-fingerprint gate, tolerant rebuild)
+- `features.md` / `configuration.md`: index location, `loops refresh` rebuild, self-healing
+
 ## 1.4.0 - 2026-06-29
 
 ### Docs

@@ -133,8 +133,27 @@ own (safe to delete `~/.open-loops/cache/`).
 ├── state.toml         # active @context (set via `loops @name`)
 ├── ignores.toml       # loops dismissed via `loops ignore`
 ├── cache/             # distillations per repo/branch@sha (safe to delete)
-└── inventory/         # ahead/behind memo per repo (safe to delete)
+├── inventory/         # ahead/behind memo per repo (safe to delete)
+└── index.db           # SQLite scan + session index (safe to delete)
 ```
+
+### SQLite index
+
+`index.db` (with its `-wal`/`-shm` siblings, WAL mode) is a **disposable cache**
+of scan and session data:
+
+- **Refs-fingerprint gate** — when a repo's refs are unchanged since the last
+  scan, cached loops are served and the heavy git phase is skipped.
+- **Common-dir cache** — repeated scans skip `git rev-parse --git-common-dir`
+  during repo dedup.
+- **Session FTS** — `loops resume` probes for the branch mention via a full-text
+  index over a bounded tail of each session, instead of reading whole files.
+
+**Git is the source of truth; the index is throwaway.** Delete `index.db` at any
+time — the next run rebuilds it as a byproduct of scanning. A corrupt or
+unreadable db **self-heals**: it is deleted and recreated with a one-line
+`warning:` on stderr, and the command still succeeds. `loops refresh` rebuilds
+the index rows for the scoped repos and prunes rows for repos gone from disk.
 
 ### Inventory cache
 
@@ -150,5 +169,5 @@ validation (default 0 = SHA-only):
 inventory_ttl_secs = 3600   # re-run rev-list after 1 hour even if SHAs match
 ```
 
-Use `loops --fresh` to bypass the memo for a single invocation, or
-`loops refresh` to force a full reindex.
+Use `loops --fresh` to bypass both the inventory memo and the SQLite gate for a
+single invocation, or `loops refresh` to force a full reindex of both stores.

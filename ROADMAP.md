@@ -111,6 +111,23 @@ Depende de: **ADR fase 2** (push-down)
 - [x] contexto ativo em `state.toml`; `@ctx` na CLI grava e filtra
 - [x] remover erro "contexts not supported yet" do parser
 
+### ✅ SQLite index — cache descartável de scan + sessões  ·  [ADR 0008](docs/decisions/0008-sqlite-index.md)
+
+Depende de: **Spec Fase A** (common-dir = identidade), **ADR fase 3** (inventory).
+git permanece fonte da verdade; o índice é descartável e auto-recuperável.
+
+- [x] dependência `rusqlite` (feature `bundled`, sem libsqlite3 do sistema; MSRV 1.89)
+- [x] `src/index/mod.rs`: `Index` em `<base>/index.db` (WAL), schema `user_version=1`, open tolerante (corrupção → rebuild → fallback in-memory)
+- [x] cache de `--git-common-dir` no dedup (resolve #17)
+- [x] gate por refs-fingerprint (mtime nanos de HEAD/packed-refs/refs/worktrees + `default_sha`) pula `rev-list`/`for-each-ref` em scan quente (resolve #13)
+- [x] FTS de sessões: probe de menção em tail limitado, sem ler arquivo inteiro (resolve #14)
+- [x] ranking estável de sessões; vazias filtradas antes do `max_sessions` (resolve #15)
+- [x] wire ao vivo no `cli.rs` (`scan_indexed` + `excerpts_indexed`); JSON inventory preservado
+- [x] `loops refresh` reconstrói o índice e `Index::prune_missing_repos` remove repos sumidos do disco
+- [x] `regress.sh` verde; e2e manual + self-heal (corromper/apagar `index.db`)
+- [x] ADR 0008; `features.md` + `configuration.md` + CHANGELOG atualizados
+- [ ] #16 (estratégia de fan-out de threads) e #31 (coluna de path no `loops`) seguem fora de escopo
+
 ### ⬜ ADR fase 5 — reports `:` + `+stale` + help  ·  [ADR 0003](docs/decisions/0003-query-engine.md)
 
 Depende de: **ADR fase 2**, **ADR fase 4**
@@ -173,7 +190,7 @@ Depende de: **WAVE 1**, **WAVE 2/3**
 - [ ] `build_prompt` com múltiplos excerpts; gate 85% no core
 
 #### 4.3 — Observabilidade
-- [ ] `tracing` na lib; `--verbose` / `RUST_LOG`; ADR `0008-typed-errors-tracing.md`
+- [ ] `tracing` na lib; `--verbose` / `RUST_LOG`; ADR `0009-typed-errors-tracing.md`
 
 #### 4.4 — Community health
 - [ ] `CONTRIBUTING.md`, `CODE_OF_CONDUCT.md`, `SECURITY.md`
