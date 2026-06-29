@@ -111,7 +111,7 @@ flowchart TD
     loops(["filtered open loops<br/>(from query engine)"]) --> branch{list or resume?}
 
     branch -->|list| heavy["heavy phase per branch<br/>(scanner::open_loops_indexed)"]
-    heavy --> memo{memo hit?<br/>branch + head_sha + base_sha + TTL}
+    heavy --> memo{memo hit?<br/>key: branch + head_sha + base_sha<br/>+ TTL gate}
     memo -->|yes| reuse["reuse cached ahead/behind<br/>(lookup_ahead_behind)"]
     memo -->|no| revlist["git rev-list --left-right --count<br/>default...branch"]
     revlist --> push["append LoopMemo<br/>to new memos"]
@@ -347,13 +347,14 @@ Code (verified against the current tree):
 - [`src/cli.rs:18`](../../src/cli.rs:18) — `ResumeEvidence` (the evidence snapshot);
   [`src/cli.rs:189`](../../src/cli.rs:189) — `gather_resume_evidence` (assembly);
   [`src/cli.rs:110`](../../src/cli.rs:110) — `scan_with_inventory` (write-through);
-  [`src/cli.rs:90`](../../src/cli.rs:90) — `write_inventory`;
+  [`src/cli.rs:91`](../../src/cli.rs:91) — `write_inventory`;
   [`src/cli.rs:224`](../../src/cli.rs:224) — `run_list` (inventory rows → table);
   [`src/cli.rs:292`](../../src/cli.rs:292) — `run_resume`;
   [`src/cli.rs:336`](../../src/cli.rs:336) — `run_refresh` (reindex + prune).
 - [`src/scanner.rs:116`](../../src/scanner.rs:116) — `OpenLoop.ahead`/`behind`;
   [`src/scanner.rs:451`](../../src/scanner.rs:451) — `open_loops_indexed`
-  (heavy-phase memo lookup at [`:563`](../../src/scanner.rs:563), `rev-list` at
+  (`need_ahead_behind` branch at [`:563`](../../src/scanner.rs:563), memo lookup at
+  [`:566`](../../src/scanner.rs:566), `rev-list` at
   [`:582`](../../src/scanner.rs:582), empty-base guard at [`:524`](../../src/scanner.rs:524));
   [`src/scanner.rs:964`](../../src/scanner.rs:964) — `git_log`;
   [`src/scanner.rs:973`](../../src/scanner.rs:973) — `diffstat`;
