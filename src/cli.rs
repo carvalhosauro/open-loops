@@ -32,6 +32,34 @@ fn progress(msg: &str) {
     eprintln!("{msg}");
 }
 
+/// Loads config and enforces the invariant that at least one root is registered.
+/// Every command that scans repos shares this preamble; centralizing it keeps the
+/// "no roots" guidance identical across all entry points.
+fn load_cfg_with_roots(base: &Path) -> Result<(Store, crate::config::Config)> {
+    let store = Store::new(base.to_path_buf());
+    let cfg = store.load()?;
+    ensure!(
+        !cfg.roots.is_empty(),
+        "no roots configured. Run: loops init <dir-with-your-repos>"
+    );
+    Ok((store, cfg))
+}
+
+/// Builds the query `Candidate` view of a loop. `key` is borrowed by the returned
+/// Candidate, so the caller must own it (via `l.key()`) for at least as long as
+/// the Candidate — hence it is passed in rather than computed here.
+fn candidate_of<'a>(l: &'a OpenLoop, key: &'a str, ignored: bool) -> crate::query::Candidate<'a> {
+    crate::query::Candidate {
+        repo_name: &l.repo_name,
+        branch: &l.branch,
+        key,
+        last_commit: l.last_commit,
+        ahead: l.ahead,
+        behind: l.behind,
+        ignored,
+    }
+}
+
 fn resolve_plan_persisting(
     base: &Path,
     cfg: &crate::config::Config,
@@ -96,6 +124,10 @@ fn scan_with_inventory(
         inventory_dir: Some(inv_store.dir.clone()),
         inventory_ttl_secs: cfg.inventory_ttl_secs,
     };
+    // Only the first repo filter is pushed into the scan as a directory-walk
+    // narrowing hint; any remaining repo filters (and all other filters) are
+    // applied afterward in memory by ScanPlan::matches, so correctness does not
+    // depend on the scan honoring more than one.
     let (found, warnings, inv_updates) = scanner::scan_indexed(
         roots,
         labels,
@@ -111,12 +143,7 @@ fn scan_with_inventory(
 }
 
 fn resolve_loop(base: &Path, query: &str, fresh: bool) -> Result<OpenLoop> {
-    let store = Store::new(base.to_path_buf());
-    let cfg = store.load()?;
-    ensure!(
-        !cfg.roots.is_empty(),
-        "no roots configured. Run: loops init <dir-with-your-repos>"
-    );
+    let (_store, cfg) = load_cfg_with_roots(base)?;
     let mut plan = resolve_plan_persisting(base, &cfg, query)?;
     plan.include_ignored = true; // resume can target an ignored loop by key
     let labels = cfg.resolve_labels()?;
@@ -142,18 +169,7 @@ fn resolve_loop(base: &Path, query: &str, fresh: bool) -> Result<OpenLoop> {
         .iter()
         .filter(|l| {
             let key = l.key();
-            plan.matches(
-                &crate::query::Candidate {
-                    repo_name: &l.repo_name,
-                    branch: &l.branch,
-                    key: &key,
-                    last_commit: l.last_commit,
-                    ahead: l.ahead,
-                    behind: l.behind,
-                    ignored: false,
-                },
-                now,
-            )
+            plan.matches(&candidate_of(l, &key, false), now)
         })
         .collect();
     match matches.len() {
@@ -203,13 +219,10 @@ fn gather_resume_evidence(base: &Path, lp: &OpenLoop) -> Result<ResumeEvidence> 
     })
 }
 
+/// Backs `loops [query]`: persists any `@context` switch, scans the matching
+/// repos, and renders the inventory table to stdout.
 pub fn run_list(base: &Path, query: &str, fresh: bool) -> Result<()> {
-    let store = Store::new(base.to_path_buf());
-    let cfg = store.load()?;
-    ensure!(
-        !cfg.roots.is_empty(),
-        "no roots configured. Run: loops init <dir-with-your-repos>"
-    );
+    let (_store, cfg) = load_cfg_with_roots(base)?;
     let mut plan = resolve_plan_persisting(base, &cfg, query)?;
     plan.need_ahead_behind = true; // table always renders AHEAD/BEHIND columns
     let labels = cfg.resolve_labels()?;
@@ -217,13 +230,14 @@ pub fn run_list(base: &Path, query: &str, fresh: bool) -> Result<()> {
     progress("scanning git repositories…");
     let inv_store = InventoryStore::new(base);
     let index = Index::open(base);
+    let need_ahead_behind = true;
     let (found, inv_updates) = scan_with_inventory(
         base,
         &cfg,
         &plan,
         &roots,
         &labels,
-        true, // need_ahead_behind
+        need_ahead_behind,
         fresh,
         Some(&index),
     )?;
@@ -234,18 +248,7 @@ pub fn run_list(base: &Path, query: &str, fresh: bool) -> Result<()> {
         .into_iter()
         .filter(|l| {
             let key = l.key();
-            plan.matches(
-                &crate::query::Candidate {
-                    repo_name: &l.repo_name,
-                    branch: &l.branch,
-                    key: &key,
-                    last_commit: l.last_commit,
-                    ahead: l.ahead,
-                    behind: l.behind,
-                    ignored: ignores.contains(&key),
-                },
-                now,
-            )
+            plan.matches(&candidate_of(l, &key, ignores.contains(&key)), now)
         })
         .collect();
     if visible.is_empty() && !query.trim().is_empty() {
@@ -256,6 +259,8 @@ pub fn run_list(base: &Path, query: &str, fresh: bool) -> Result<()> {
     Ok(())
 }
 
+/// Backs `loops init`: registers repository roots in the config so later scans
+/// know where to look.
 pub fn run_init(base: &Path, paths: &[PathBuf]) -> Result<()> {
     ensure!(!paths.is_empty(), "usage: loops init <dir> [<dir>...]");
     let store = Store::new(base.to_path_buf());
@@ -268,6 +273,8 @@ pub fn run_init(base: &Path, paths: &[PathBuf]) -> Result<()> {
     Ok(())
 }
 
+/// Backs `loops ignore`: persists a `repo/branch` key to the ignore list so it
+/// no longer surfaces as an open loop.
 pub fn run_ignore(base: &Path, key: &str) -> Result<()> {
     ensure!(
         key.contains('/'),
@@ -279,6 +286,9 @@ pub fn run_ignore(base: &Path, key: &str) -> Result<()> {
     Ok(())
 }
 
+/// Backs `loops resume`: resolves the single matching loop and distills its
+/// context via the LLM, serving from cache when possible. `dry_run` prints the
+/// matched evidence without calling the LLM.
 pub fn run_resume(base: &Path, query: &str, dry_run: bool, fresh: bool) -> Result<()> {
     progress("scanning git…");
     let lp = resolve_loop(base, query, fresh)?;
@@ -324,12 +334,7 @@ pub fn run_resume(base: &Path, query: &str, dry_run: bool, fresh: bool) -> Resul
 /// Reindexes ahead/behind for all repos matching `query` (or all repos when
 /// `query` is empty), writes the updated inventory, and prunes orphan files.
 pub fn run_refresh(base: &Path, query: &str) -> Result<()> {
-    let store = Store::new(base.to_path_buf());
-    let cfg = store.load()?;
-    ensure!(
-        !cfg.roots.is_empty(),
-        "no roots configured. Run: loops init <dir-with-your-repos>"
-    );
+    let (_store, cfg) = load_cfg_with_roots(base)?;
     let plan = resolve_plan_persisting(base, &cfg, query)?;
     let labels = cfg.resolve_labels()?;
     let roots = cfg.resolve_scan_roots(&plan)?;
@@ -338,14 +343,16 @@ pub fn run_refresh(base: &Path, query: &str) -> Result<()> {
     // `fresh: true` bypasses the gate but still writes through, so the index's
     // `loops`/`repos` rows are rebuilt for the scoped repos on this scan.
     let index = Index::open(base);
+    let need_ahead_behind = true;
+    let fresh = true; // refresh always recomputes — ignores any cached memo
     let (found, inv_updates) = scan_with_inventory(
         base,
         &cfg,
         &plan,
         &roots,
         &labels,
-        true, // need_ahead_behind
-        true, // fresh: refresh always recomputes — ignores any cached memo
+        need_ahead_behind,
+        fresh,
         Some(&index),
     )?;
 
@@ -363,18 +370,7 @@ pub fn run_refresh(base: &Path, query: &str) -> Result<()> {
             .iter()
             .filter(|l| {
                 let key = l.key();
-                plan.matches(
-                    &crate::query::Candidate {
-                        repo_name: &l.repo_name,
-                        branch: &l.branch,
-                        key: &key,
-                        last_commit: l.last_commit,
-                        ahead: l.ahead,
-                        behind: l.behind,
-                        ignored: ignores.contains(&key),
-                    },
-                    now,
-                )
+                plan.matches(&candidate_of(l, &key, ignores.contains(&key)), now)
             })
             .map(|l| l.head_sha.as_str())
             .collect();
@@ -420,12 +416,7 @@ pub fn run_completions(shell: clap_complete::Shell) -> Result<()> {
 }
 
 pub fn run_worktrees(base: &Path) -> Result<()> {
-    let store = Store::new(base.to_path_buf());
-    let cfg = store.load()?;
-    ensure!(
-        !cfg.roots.is_empty(),
-        "no roots configured. Run: loops init <dir-with-your-repos>"
-    );
+    let (_store, cfg) = load_cfg_with_roots(base)?;
     progress("scanning git worktrees…");
     let (wts, warnings) = worktrees::scan_worktrees(&cfg.roots, cfg.scan_depth);
     for w in &warnings {

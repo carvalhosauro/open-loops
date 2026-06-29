@@ -22,6 +22,9 @@ pub enum Command {
     Init { paths: Vec<PathBuf> },
     /// Distill a loop's context: why, done, remaining, next step
     Resume {
+        // A single String, not a trailing_var_arg Vec like list/refresh: Resume
+        // takes option flags (--dry-run/--fresh) after the positional, and a
+        // trailing var-arg would swallow those flags into the query.
         query: String,
         /// Show matched git commits and AI sessions without calling the LLM
         #[arg(long)]
