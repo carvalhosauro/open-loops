@@ -297,10 +297,9 @@ the bounded tail for the finally-selected sessions
 ## Decisions
 
 This domain has no dedicated ADR. The decisions below are absorbed from the
-worktree-session-attribution design — its spec
-([`docs/superpowers/specs/2026-06-25-worktree-session-attribution.md`](../superpowers/specs/2026-06-25-worktree-session-attribution.md))
-and plan
-([`docs/superpowers/plans/2026-06-25-worktree-session-attribution.md`](../superpowers/plans/2026-06-25-worktree-session-attribution.md)).
+worktree-session-attribution design — its spec and plan (originally
+`2026-06-25-worktree-session-attribution.md` under `docs/superpowers/`, now
+consolidated into this layer; the originals are preserved in git history).
 They build on the cross-cutting *pull-only* and *shell-out* decisions in
 [00-overview](00-overview.md#decisions).
 

@@ -277,8 +277,9 @@ enables pipes and redirections in `llm_command` but also means the command is
 shell-interpreted; this is intended (it is a user-controlled local config value),
 not untrusted input.
 
-> **Note — ADR-0002 is written in Portuguese.** The source ADR
-> ([`docs/decisions/0002-git-e-llm-via-shell-out.md`](../decisions/0002-git-e-llm-via-shell-out.md))
+> **Note — ADR-0002 was written in Portuguese.** The source ADR
+> (ex-ADR-0002, originally `0002-git-e-llm-via-shell-out.md`, now consolidated
+> into this layer; preserved in git history)
 > records this decision in Portuguese; the decision and its trade-offs are
 > re-stated here in English with no change of substance. The current code matches
 > the ADR exactly: `llm_command` defaults to `claude -p`

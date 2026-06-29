@@ -325,7 +325,7 @@ The pull-only model (ex-ADR-0001) and git/LLM-via-shell-out (ex-ADR-0002) are
 unchanged — the index only memoises what git already produces.
 
 > **Code vs. plan — discrepancy noted.** The migration plan
-> ([`docs/superpowers/plans/2026-06-29-sqlite-index-migration.md`](../superpowers/plans/2026-06-29-sqlite-index-migration.md))
+> (`2026-06-29-sqlite-index-migration.md`, now consolidated into this layer)
 > specified a single `user_version = 1` migration with a **contentless**
 > `sessions_fts` (`content=''`). The shipped code instead uses a **contentful**
 > FTS5 table and a two-step migration ending at `user_version = 2`: the contentless
@@ -337,7 +337,7 @@ unchanged — the index only memoises what git already produces.
 
 **Distillation cache — file-per-`branch@head-sha`, self-invalidating**
 *(the cache portion of the phase-3 inventory-cache plan,
-[`docs/superpowers/plans/2026-06-26-inventory-cache-phase3.md`](../superpowers/plans/2026-06-26-inventory-cache-phase3.md);
+`2026-06-26-inventory-cache-phase3.md`;
 the pull-only mitigation in ex-ADR-0001)*. A cold resume pays for an LLM call
 (~30–60s); the chosen mitigation is to cache the finished resume context on disk,
 keyed by the loop's `branch@head-sha`. Encoding the HEAD sha directly in the
@@ -432,11 +432,9 @@ in [`src/index/mod.rs`](../../src/index/mod.rs:697) —
 `upsert_session_reindexes_on_same_second_size_change`, and
 `prune_missing_repos_keeps_repo_when_common_dir_survives`.
 
-Absorbed decision + plans: [`docs/decisions/0008-sqlite-index.md`](../decisions/0008-sqlite-index.md)
-*(ex-ADR-0008)* ·
-[`docs/superpowers/plans/2026-06-29-sqlite-index-migration.md`](../superpowers/plans/2026-06-29-sqlite-index-migration.md) ·
-[`docs/superpowers/plans/2026-06-26-inventory-cache-phase3.md`](../superpowers/plans/2026-06-26-inventory-cache-phase3.md)
-(cache portion).
+Absorbed decisions are recorded above in *Decisions* (ex-ADR-0008); the original
+ADR and the SQLite-index / phase-3 inventory-cache migration plans are preserved
+in git history.
 
 Sibling architecture docs: [00-overview](00-overview.md) ·
 [01-discovery](01-discovery.md) (owns the scan and its parallelism) ·
