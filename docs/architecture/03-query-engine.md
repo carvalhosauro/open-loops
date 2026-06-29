@@ -179,19 +179,22 @@ is the single source of truth for recognised names:
 | `root:<path-or-label>` | roots-subset filter, resolved against configured roots ([`src/config.rs:127`](../../src/config.rs:127)) |
 | `idle:<op><N><unit>` | `op` ∈ `> < >= <=` (**required**); `unit` ∈ `m`/`h`/`d`/`w` (`parse_duration`, [`src/query.rs:329`](../../src/query.rs:329)) |
 | `ahead:<op?><N>` / `behind:<op?><N>` | `op` optional; bare `N` means `== N`; sets `need_ahead_behind` |
-| `+ignored` / `-ignored` | include / hide dismissed loops (`-ignored` is the default) |
+| `+ignored` | include dismissed loops (sets `include_ignored = true`) |
+| `-ignored` | hide dismissed loops (sets `include_ignored = false`); this is the default state, so it is only meaningful as an explicit override of a `+ignored` contributed by a merged context filter ([`src/query.rs:77`](../../src/query.rs:77)) |
 | `@<name>` | select context `<name>`; `@none`/`@all` clear the active context |
 | `<anything else>` | bare term (including unknown `name:value`, e.g. `foo:bar`) |
 | `:<report>` | **rejected**: reports are reserved for a later phase |
 | `+stale` | **rejected**: `+stale` is reserved for a later phase |
 
-`@`-token handling is not in `parse` (which rejects `:report`/`+stale` and treats
-`@` like any token); it is in `resolve_plan` ([`src/query.rs:225`](../../src/query.rs:225))
-and `context_persistence_from_query` ([`src/query.rs:159`](../../src/query.rs:159)).
-At most one `@context` is allowed per query (`single_context_token`,
-[`src/query.rs:149`](../../src/query.rs:149)), and a context's own `filter` string
-may not contain `@` or `:` (`validate_context_filter`,
-[`src/query.rs:212`](../../src/query.rs:212)) — contexts cannot nest.
+`@`-token handling is not in `parse` (which rejects only `:report`/`+stale`): `@`
+tokens are extracted by `resolve_plan` ([`src/query.rs:225`](../../src/query.rs:225))
+before `parse` is called, so `parse` never receives them. Persistence of the
+selected context is decided by `context_persistence_from_query`
+([`src/query.rs:159`](../../src/query.rs:159)). At most one `@context` is allowed
+per query (`single_context_token`, [`src/query.rs:149`](../../src/query.rs:149)),
+and a context's own `filter` string may not contain `@` or start with `:`
+(`validate_context_filter`, [`src/query.rs:212`](../../src/query.rs:212)) — contexts
+cannot nest.
 
 **Evaluation contract** — `ScanPlan::matches(&Candidate, now) -> bool`
 ([`src/query.rs:346`](../../src/query.rs:346)). A loop matches when it satisfies
@@ -243,9 +246,12 @@ User-facing query examples and the full attribute table live in
 - **At most one `@context` per query**, enforced before resolution
   (`single_context_token`, [`src/query.rs:149`](../../src/query.rs:149)); a second
   `@` token is a clear error.
-- **Contexts cannot nest.** A context `filter` containing `@` or `:` is rejected
-  (`validate_context_filter`, [`src/query.rs:212`](../../src/query.rs:212)), so
-  resolution is single-pass and predictable.
+- **Contexts cannot nest.** A context `filter` whose token contains `@` or starts
+  with `:` is rejected (`validate_context_filter`,
+  [`src/query.rs:212`](../../src/query.rs:212): `contains('@')` /
+  `starts_with(':')`), so resolution is single-pass and predictable. Note that a
+  leading `:` (report syntax) is what is caught — an attribute value like
+  `repo:billing` inside a context filter is valid.
 - **Explicit `@` replaces the active context; `@none`/`@all` clears it.** With no
   `@` token the active context (from `state.toml`) applies; an explicit `@name`
   both scopes that run and persists the switch; `@none`/`@all` ignores and clears
@@ -254,6 +260,11 @@ User-facing query examples and the full attribute table live in
 - **`ahead`/`behind` predicates fail closed on missing data.** When the heavy phase
   was skipped, `ahead`/`behind` are `None` and the predicate does not match, rather
   than matching a fabricated zero.
+- **`need_ahead_behind` is a caller-OR flag.** The parser sets it true when the
+  query has an `ahead`/`behind` predicate, but a caller may *also* set it true
+  after parsing to force the heavy phase when it renders the AHEAD/BEHIND columns
+  (the list path always does); the two needs are ORed (struct doc-comment,
+  [`src/query.rs:51`](../../src/query.rs:51)).
 
 ## Decisions
 
