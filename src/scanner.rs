@@ -689,17 +689,47 @@ pub fn scan(
     scan_indexed(roots, labels, scan_depth, opts, repo_filter, None)
 }
 
+/// Cheap per-repo git values computed once, in parallel, for the gate.
+///
+/// All three are derived from git subprocess calls (`default_branch_and_sha`,
+/// `git_common_dir`) plus a recursive ref-tree stat (`refs_fingerprint`). They
+/// are computed exactly ONCE per repo and threaded through both the gate read
+/// and the write-through so the git work never runs more than once per cold repo.
+struct GateInputs {
+    default: String,
+    default_sha: String,
+    common_dir: PathBuf,
+    refs_fp: i64,
+    gate_hash: String,
+}
+
 /// Like [`scan`] but optionally consults a SQLite `index` for the
 /// refs-fingerprint gate (#13) and to cache `--git-common-dir` during repo
 /// discovery.
 ///
 /// `rusqlite::Connection` is `Send` but `!Sync`, so a single `&Index` cannot be
-/// shared across the parallel scan threads. The gate is therefore evaluated
-/// **sequentially on the calling thread** (a gate hit is cheap — a handful of
-/// `stat`s plus one SQLite read — so warm scans stay fast), while every repo
-/// that misses the gate is recomputed **in parallel** exactly as before, with
-/// its fresh result written through to the index afterwards on the calling
-/// thread. The `None` path is byte-for-byte identical to the pre-index `scan`.
+/// shared across the parallel scan threads. We therefore keep the cheap SQLite
+/// reads/writes on the calling thread while running ALL git work in parallel —
+/// the same parallelism the pre-index `scan` had. The shape is three phases:
+///
+/// 1. **Parallel git probes** (`thread::scope`): for every repo, compute the
+///    cheap gate inputs (`default_branch_and_sha`, `git_common_dir`,
+///    `refs_fingerprint`) ONCE. This replaces the old serial `git` fan-out that
+///    serialized ~2 subprocess spawns per repo on the calling thread.
+/// 2. **Sequential SQLite gate** on the calling thread: one indexed
+///    `cached_loops` read per repo, using the precomputed inputs. Hits are
+///    served directly; misses are deferred.
+/// 3. **Parallel recompute** of the misses (`thread::scope`), followed by a
+///    sequential write-through that REUSES the already-computed gate inputs
+///    (no third re-shell of the git values).
+///
+/// `--fresh` runs phase 1 (so the write-through still has its inputs) but skips
+/// the phase-2 gate read, treating every repo as a miss — the gate is bypassed
+/// yet the index is still refreshed, matching the pre-index behaviour.
+///
+/// The `None` path is byte-for-byte identical to the pre-index `scan`: it skips
+/// phases 1–2 entirely and recomputes every repo in parallel with no gate and
+/// no write-through.
 pub fn scan_indexed(
     roots: &[PathBuf],
     labels: &[(PathBuf, String)],
@@ -717,25 +747,100 @@ pub fn scan_indexed(
     let mut all = Vec::new();
     let mut inventory_updates = Vec::new();
 
-    // Phase 1 (only with an index): try the gate sequentially on this thread.
-    // Repos that miss are deferred to the parallel recompute below.
-    let misses: Vec<&RepoCandidate> = if let Some(idx) = index {
-        let mut misses = Vec::new();
-        for repo in &repos {
-            let label = crate::config::label_for_repo(labels, &repo.path);
-            match try_gate(&repo.path, &label, opts, idx) {
-                Some(Ok((mut loops, _))) => all.append(&mut loops),
-                Some(Err(e)) => warnings.push(format!("{}: {e:#}", repo.path.display())),
-                None => misses.push(repo),
-            }
-        }
-        misses
-    } else {
-        repos.iter().collect()
+    // No index: the gate is inert. Recompute everything in parallel exactly like
+    // the pre-index `scan` (the `None`-path contract — no gate inputs, no
+    // write-through).
+    let Some(idx) = index else {
+        let misses: Vec<&RepoCandidate> = repos.iter().collect();
+        recompute_misses(&misses, &[], labels, opts, None, &mut all, &mut warnings)
+            .into_iter()
+            .for_each(|u| inventory_updates.push(u));
+        return (all, warnings, inventory_updates);
     };
 
-    // Phase 2: recompute the misses (and the entire `None` path) in parallel,
-    // without the index (it is `!Sync`). Write-through happens afterwards.
+    // Phase 1: compute the cheap gate inputs for every repo IN PARALLEL. This is
+    // the git work the old code ran serially in `try_gate`. Results are
+    // positionally aligned with `repos`; `Err` is a fatal git error reported
+    // once. The inputs are reused for both the gate read and the write-through.
+    let gate_inputs: Vec<Result<GateInputs>> = std::thread::scope(|s| {
+        let handles: Vec<_> = repos
+            .iter()
+            .map(|repo| {
+                let path = repo.path.clone();
+                s.spawn(move || compute_gate_inputs(&path))
+            })
+            .collect();
+        handles
+            .into_iter()
+            .map(|h| {
+                h.join()
+                    .unwrap_or_else(|_| Err(anyhow::anyhow!("panic while probing repository")))
+            })
+            .collect()
+    });
+
+    // Phase 2: sequential SQLite gate read on the calling thread (skipped under
+    // `--fresh`, which still recomputes and writes through). Hits are served
+    // from cache; misses (and their precomputed inputs) are deferred.
+    let mut misses: Vec<&RepoCandidate> = Vec::new();
+    let mut miss_inputs: Vec<GateInputs> = Vec::new();
+    for (repo, inputs) in repos.iter().zip(gate_inputs) {
+        let inputs = match inputs {
+            Ok(i) => i,
+            // Propagate the git error so the repo is reported once, not retried.
+            Err(e) => {
+                warnings.push(format!("{}: {e:#}", repo.path.display()));
+                continue;
+            }
+        };
+        let label = crate::config::label_for_repo(labels, &repo.path);
+        // `--fresh` bypasses the gate read but keeps the write-through below.
+        let hit = if opts.fresh {
+            None
+        } else {
+            gate_lookup(&label, opts, idx, &inputs)
+        };
+        match hit {
+            Some(mut loops) => all.append(&mut loops),
+            None => {
+                misses.push(repo);
+                miss_inputs.push(inputs);
+            }
+        }
+    }
+
+    // Phase 3: recompute the misses in parallel and write them through using the
+    // gate inputs already computed in phase 1 (no re-shell of the git values).
+    recompute_misses(
+        &misses,
+        &miss_inputs,
+        labels,
+        opts,
+        index,
+        &mut all,
+        &mut warnings,
+    )
+    .into_iter()
+    .for_each(|u| inventory_updates.push(u));
+
+    (all, warnings, inventory_updates)
+}
+
+/// Recomputes `misses` in parallel (heavy git phase) and, when an index is
+/// present, writes each result through using the matching precomputed
+/// `gate_inputs` (positionally aligned with `misses`; empty when there is no
+/// index / `--fresh`, in which case write-through is skipped). Appends loops to
+/// `all`, warnings to `warnings`, and returns the inventory updates.
+fn recompute_misses(
+    misses: &[&RepoCandidate],
+    gate_inputs: &[GateInputs],
+    labels: &[(PathBuf, String)],
+    opts: &ScanOptions,
+    index: Option<&Index>,
+    all: &mut Vec<OpenLoop>,
+    warnings: &mut Vec<String>,
+) -> Vec<InvUpdate> {
+    let mut inventory_updates = Vec::new();
     let results: Vec<Result<(Vec<OpenLoop>, Option<InvUpdate>)>> = std::thread::scope(|s| {
         let handles: Vec<_> = misses
             .iter()
@@ -754,13 +859,15 @@ pub fn scan_indexed(
             .collect()
     });
 
-    for (repo, res) in misses.iter().zip(results) {
+    for (i, (repo, res)) in misses.iter().zip(results).enumerate() {
         match res {
             Ok((loops, inv)) => {
-                // Write the freshly computed loops through to the index so the
-                // next unchanged-refs scan hits the gate.
+                // Write the freshly computed loops through to the index using the
+                // gate inputs already computed in phase 1 (no re-shell).
                 if let Some(idx) = index {
-                    write_through(&repo.path, &loops, idx);
+                    if let Some(inputs) = gate_inputs.get(i) {
+                        write_through(&repo.path, &loops, idx, inputs);
+                    }
                 }
                 all.extend(loops);
                 if let Some(update) = inv {
@@ -770,39 +877,43 @@ pub fn scan_indexed(
             Err(e) => warnings.push(format!("{}: {e:#}", repo.path.display())),
         }
     }
-    (all, warnings, inventory_updates)
+    inventory_updates
 }
 
-/// Sequential gate check for a single repo. `Some(Ok(..))` is a hit that the
-/// caller can use directly; `Some(Err(..))` is a fatal git error (e.g. no
-/// default branch); `None` is a cache miss to be recomputed in parallel.
-fn try_gate(
-    repo: &Path,
+/// Computes the cheap per-repo gate inputs once (called in parallel, phase 1).
+///
+/// # Errors
+///
+/// Returns `Err` if the default branch or common-dir cannot be resolved.
+fn compute_gate_inputs(repo: &Path) -> Result<GateInputs> {
+    let (default, default_sha) = default_branch_and_sha(repo)?;
+    let common_dir = git_common_dir(repo)?;
+    let refs_fp = refs_fingerprint(&common_dir);
+    let gate_hash = inventory::common_dir_hash(&common_dir);
+    Ok(GateInputs {
+        default,
+        default_sha,
+        common_dir,
+        refs_fp,
+        gate_hash,
+    })
+}
+
+/// Sequential SQLite gate read for one repo using its precomputed inputs.
+/// `Some(loops)` is a hit the caller can use directly; `None` is a cache miss to
+/// be recomputed in parallel. No git work happens here — only one indexed read.
+fn gate_lookup(
     label: &str,
     opts: &ScanOptions,
     idx: &Index,
-) -> Option<Result<(Vec<OpenLoop>, Option<InvUpdate>)>> {
-    if opts.fresh {
-        return None;
-    }
-    let (_default, default_sha) = match default_branch_and_sha(repo) {
-        Ok(pair) => pair,
-        // Propagate the error so the repo is reported once, not retried.
-        Err(e) => return Some(Err(e)),
-    };
-    let common_dir = match git_common_dir(repo) {
-        Ok(cd) => cd,
-        Err(e) => return Some(Err(e)),
-    };
-    let repo_name = repo_name_from_common_dir(&common_dir);
-    let refs_fp = refs_fingerprint(&common_dir);
-    let gate_hash = inventory::common_dir_hash(&common_dir);
-
-    let rows = idx.cached_loops(&gate_hash, refs_fp, &default_sha)?;
+    inputs: &GateInputs,
+) -> Option<Vec<OpenLoop>> {
+    let rows = idx.cached_loops(&inputs.gate_hash, inputs.refs_fp, &inputs.default_sha)?;
     // Serve only if the cached rows satisfy the caller's ahead/behind need.
     if opts.need_ahead_behind && !rows.iter().all(|r| r.ahead.is_some()) {
         return None;
     }
+    let repo_name = repo_name_from_common_dir(&inputs.common_dir);
     let loops = rows
         .into_iter()
         .map(|r| OpenLoop {
@@ -816,25 +927,18 @@ fn try_gate(
             behind: r.behind,
         })
         .collect();
-    Some(Ok((loops, None)))
+    Some(loops)
 }
 
-/// Persists freshly recomputed `loops` for `repo` to the index after a miss.
-fn write_through(repo: &Path, loops: &[OpenLoop], idx: &Index) {
-    let Ok(common_dir) = git_common_dir(repo) else {
-        return;
-    };
-    let Ok((default, default_sha)) = default_branch_and_sha(repo) else {
-        return;
-    };
-    let gate_hash = inventory::common_dir_hash(&common_dir);
-    let refs_fp = refs_fingerprint(&common_dir);
+/// Persists freshly recomputed `loops` for `repo` to the index after a miss,
+/// reusing the gate inputs already computed in phase 1 (no re-shell of git).
+fn write_through(repo: &Path, loops: &[OpenLoop], idx: &Index, inputs: &GateInputs) {
     let rows: Vec<crate::index::LoopRow> = loops
         .iter()
         .map(|l| crate::index::LoopRow {
             branch: l.branch.clone(),
             head_sha: l.head_sha.clone(),
-            base_sha: default_sha.clone(),
+            base_sha: inputs.default_sha.clone(),
             ahead: l.ahead,
             behind: l.behind,
             last_commit: l.last_commit,
@@ -842,12 +946,12 @@ fn write_through(repo: &Path, loops: &[OpenLoop], idx: &Index) {
         })
         .collect();
     idx.put_loops(
-        &gate_hash,
+        &inputs.gate_hash,
         repo,
-        &common_dir,
-        &default,
-        &default_sha,
-        refs_fp,
+        &inputs.common_dir,
+        &inputs.default,
+        &inputs.default_sha,
+        inputs.refs_fp,
         &rows,
     );
 }
