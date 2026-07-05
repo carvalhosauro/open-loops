@@ -9,6 +9,7 @@ pub mod ignores;
 pub mod index;
 pub mod inventory;
 pub mod output;
+pub mod parallel;
 pub mod query;
 pub mod scanner;
 pub mod sessions;
