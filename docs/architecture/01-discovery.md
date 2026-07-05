@@ -49,8 +49,8 @@ Public entry points:
 - `scanner::open_loops` / `open_loops_indexed` ([`src/scanner.rs:424`](../../src/scanner.rs:424),
   [`src/scanner.rs:451`](../../src/scanner.rs:451)) — enumerate the open loops of
   one repo.
-- `worktrees::worktrees` / `scan_worktrees` ([`src/worktrees.rs:84`](../../src/worktrees.rs:84),
-  [`src/worktrees.rs:150`](../../src/worktrees.rs:150)) — worktree inventory for
+- `worktrees::worktrees` / `scan_worktrees` ([`src/worktrees.rs:180`](../../src/worktrees.rs:180),
+  [`src/worktrees.rs:207`](../../src/worktrees.rs:207)) — worktree inventory for
   one repo / all repos under the roots.
 
 ## Concepts & vocabulary
@@ -136,7 +136,9 @@ In code, `scan_indexed` ([`src/scanner.rs:733`](../../src/scanner.rs:733)) drive
 the flow: it calls `find_repos_cached` (walk + dedup), filters by `repo:` name
 when the query pushed one down (the `repo:` predicate is defined in
 [03-query-engine](03-query-engine.md)), then fans `open_loops` out across the
-discovered repos on a thread per repo (`std::thread::scope`). Inside `open_loops_indexed`
+discovered repos on a bounded worker pool (`crate::parallel::try_map`, capped at
+≈`nproc`) rather than one OS thread per repo — the old unbounded fan-out (#16).
+Inside `open_loops_indexed`
 ([`src/scanner.rs:451`](../../src/scanner.rs:451)) the *light phase* always runs
 (default branch, worktree map, merged set, `for-each-ref`); the *heavy phase*
 (`rev-list` for ahead/behind) runs only when the caller asks for ahead/behind,
@@ -146,7 +148,7 @@ and is memoised. The walk itself is `walk`
 
 The worktree inventory (`loops worktrees`) reuses `find_repos` for discovery and
 then, per repo, parses `git worktree list --porcelain` and classifies each entry
-(`worktrees::worktrees`, [`src/worktrees.rs:84`](../../src/worktrees.rs:84)).
+(`worktrees::worktrees`, [`src/worktrees.rs:180`](../../src/worktrees.rs:180)).
 
 ## Interfaces & contracts
 
@@ -196,9 +198,9 @@ in [docs/features.md](../features.md) — not duplicated here.
     (`dedup_candidates_cached`, [`src/scanner.rs:368`](../../src/scanner.rs:368)).
   - A repo whose parallel `open_loops` returns `Err` (or panics) becomes a
     warning while the other repos' results are still collected
-    (`recompute_misses`, [`src/scanner.rs:877`](../../src/scanner.rs:877); the
+    (`recompute_misses`, [`src/scanner.rs:825`](../../src/scanner.rs:825); the
     index-free path behaves identically). The same holds for the worktree
-    inventory (`scan_worktrees`, [`src/worktrees.rs:170`](../../src/worktrees.rs:170)).
+    inventory (`scan_worktrees`, [`src/worktrees.rs:207`](../../src/worktrees.rs:207)).
   - Inside `open_loops`, a failing `git worktree list` does not abort the repo:
     it warns and falls back to an empty branch→worktree map, so loops still list
     with `repo_path` defaulting to the container
@@ -334,15 +336,15 @@ Code (verified against the current tree):
   malformed-line skip at [`:556`](../../src/scanner.rs:556)).
 - [`src/scanner.rs:682`](../../src/scanner.rs:682) — `scan`;
   [`src/scanner.rs:733`](../../src/scanner.rs:733) — `scan_indexed`;
-  [`src/scanner.rs:877`](../../src/scanner.rs:877) — per-repo error → warning.
+  [`src/scanner.rs:825`](../../src/scanner.rs:825) — per-repo error → warning.
 - [`src/scanner.rs:964`](../../src/scanner.rs:964) — `git_log`;
   [`src/scanner.rs:973`](../../src/scanner.rs:973) — `diffstat`;
   [`src/scanner.rs:984`](../../src/scanner.rs:984) — `commit_window`.
 - [`src/worktrees.rs:37`](../../src/worktrees.rs:37) — `Worktree`;
   [`src/worktrees.rs:51`](../../src/worktrees.rs:51) — `Worktree::verdict`;
-  [`src/worktrees.rs:84`](../../src/worktrees.rs:84) — `worktrees`;
-  [`src/worktrees.rs:150`](../../src/worktrees.rs:150) — `scan_worktrees`
-  (per-repo error → warning at [`:170`](../../src/worktrees.rs:170)).
+  [`src/worktrees.rs:180`](../../src/worktrees.rs:180) — `worktrees`;
+  [`src/worktrees.rs:207`](../../src/worktrees.rs:207) — `scan_worktrees`
+  (per-repo error → warning at [`:207`](../../src/worktrees.rs:207)).
 
 Tests worth reading: `find_repos_dedups_container_and_worktrees`,
 `find_repos_respects_scan_depth_and_skips_hidden`,
@@ -351,7 +353,7 @@ Tests worth reading: `find_repos_dedups_container_and_worktrees`,
 `open_loops_sets_repo_path_to_worktree_when_branch_checked_out`
 (all in [`src/scanner.rs`](../../src/scanner.rs:1108)), and
 `verdict_covers_all_combinations` / `scan_worktrees_aggregates_and_does_not_abort`
-(in [`src/worktrees.rs`](../../src/worktrees.rs:203)).
+(in [`src/worktrees.rs`](../../src/worktrees.rs:271)).
 
 Sibling architecture docs: [00-overview](00-overview.md) ·
 [02-sessions-attribution](02-sessions-attribution.md) (consumes `repo_path`) ·

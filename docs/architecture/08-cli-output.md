@@ -151,7 +151,7 @@ query into a `ScanPlan` via `resolve_plan_persisting`
 [03-query-engine](03-query-engine.md)). They then scan with inventory
 write-through via `scan_with_inventory` ([`src/cli.rs:110`](../../src/cli.rs:110)),
 filter loops with `ScanPlan::matches`, and finally either render
-(`output::render_table`, [`src/output.rs:31`](../../src/output.rs:31)) or, for
+(`output::render_table`, [`src/output.rs:46`](../../src/output.rs:46)) or, for
 resume, gather evidence and distill (`run_resume`,
 [`src/cli.rs:292`](../../src/cli.rs:292), threading
 `build_prompt`/`run_llm`/`with_sources`, [`src/distill.rs:64`](../../src/distill.rs:64),
@@ -166,12 +166,12 @@ config load at all.
 **The command surface — `Cli` / `Command`** ([`src/cli_command.rs:8`](../../src/cli_command.rs:8),
 [`src/cli_command.rs:20`](../../src/cli_command.rs:20)). The `Cli` parser carries
 the optional subcommand, a `trailing_var_arg` query vector, and the global
-`--fresh` flag; `args_conflicts_with_subcommands` means the bare query and a
+`--fresh` and `--path`/`-p` flags; `args_conflicts_with_subcommands` means the bare query and a
 subcommand are mutually exclusive. Each subcommand maps to one handler:
 
 | Subcommand | Handler | What it does | Side stores touched |
 |---|---|---|---|
-| `loops [query]` (default, `None`) | `run_list` ([`src/cli.rs:224`](../../src/cli.rs:224)) | Scan + filter + render the inventory table. Forces `need_ahead_behind = true` so the table always has AHEAD/BEHIND. | reads config/state, reads+writes index & inventory memo |
+| `loops [query]` (default, `None`) | `run_list` ([`src/cli.rs:224`](../../src/cli.rs:224)) | Scan + filter + render the inventory table. Forces `need_ahead_behind = true` so the table always has AHEAD/BEHIND; `--path`/`-p` adds the worktree `PATH` column. | reads config/state, reads+writes index & inventory memo |
 | `loops init <dir>...` | `run_init` ([`src/cli.rs:264`](../../src/cli.rs:264)) | Register repository roots in config; prints the resolved roots and config path. | writes config roots |
 | `loops resume <query> [--dry-run] [--fresh]` | `run_resume` ([`src/cli.rs:292`](../../src/cli.rs:292)) | Resolve the single matching loop, then either print the evidence snapshot (`--dry-run`) or serve/produce the distilled resume context. | also reads+writes the distillation cache |
 | `loops ignore <repo/branch>` | `run_ignore` ([`src/cli.rs:278`](../../src/cli.rs:278)) | Append a `repo/branch` key to the ignore list (rejects keys without a `/`). | writes the ignore list |
@@ -190,7 +190,7 @@ values plus `now` and returning a `String`:
 
 | Function | Input | Output contract |
 |---|---|---|
-| `render_table` ([`src/output.rs:31`](../../src/output.rs:31)) | `&[OpenLoop]`, `now` | The `LOOP / IDLE / AHEAD / BEHIND` table, sorted most-idle-first; column width auto-sized to the longest key. Empty input → a celebratory `"No open loops…"` line, never a blank table. |
+| `render_table` ([`src/output.rs:46`](../../src/output.rs:46)) | `&[OpenLoop]`, `now`, `show_path` | The `LOOP / IDLE / AHEAD / BEHIND` table, sorted most-idle-first; column width auto-sized to the longest key. When `show_path` (the `--path` flag) is set, appends a `PATH` column with each loop's `repo_path` (worktree dir, `~`-abbreviated). Empty input → a celebratory `"No open loops…"` line, never a blank table. |
 | `render_worktrees` ([`src/output.rs:75`](../../src/output.rs:75)) | `&[Worktree]`, `now` | The `WORKTREE / BRANCH / IDLE / MERGED / STATE / VERDICT` table, sorted deletable/prunable first then oldest-idle, followed by an ASCII cleanup-command block (or "nothing to clean up"). |
 | `human_age` ([`src/output.rs:13`](../../src/output.rs:13)) | `now`, `then` | Compact age string: `<60min → "{N}min"`, `<48h → "{N}h"`, else `"{N}d"`. |
 | `fmt_count` ([`src/output.rs:24`](../../src/output.rs:24)) | `Option<u32>` | The count, or `-` for `None` (the heavy phase was skipped). |
@@ -330,7 +330,7 @@ Code (verified against the current tree):
   [`src/cli.rs:31`](../../src/cli.rs:31) — `progress` (stderr).
 - [`src/output.rs:13`](../../src/output.rs:13) — `human_age`;
   [`src/output.rs:24`](../../src/output.rs:24) — `fmt_count` (`-` for `None`);
-  [`src/output.rs:31`](../../src/output.rs:31) — `render_table` (inventory table);
+  [`src/output.rs:46`](../../src/output.rs:46) — `render_table` (inventory table);
   [`src/output.rs:36`](../../src/output.rs:36) — the idle sort key
   (`sort_by_key(last_commit)`);
   [`src/output.rs:75`](../../src/output.rs:75) — `render_worktrees` (cleanup table
