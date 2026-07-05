@@ -417,6 +417,41 @@ fn list_filters_by_query_term() {
 }
 
 #[test]
+fn list_path_flag_shows_worktree_path_column() {
+    let tmp = tempfile::tempdir().unwrap();
+    let home = tmp.path().join("home");
+    let repo = tmp.path().join("projetos/app");
+    std::fs::create_dir_all(&repo).unwrap();
+    git(&repo, &["init", "-b", "main"]);
+    std::fs::write(repo.join("a.txt"), "a").unwrap();
+    git(&repo, &["add", "."]);
+    git(&repo, &["commit", "-m", "init"]);
+    git(&repo, &["checkout", "-b", "feat/x"]);
+    std::fs::write(repo.join("b.txt"), "b").unwrap();
+    git(&repo, &["add", "."]);
+    git(&repo, &["commit", "-m", "wip"]);
+
+    loops(&home)
+        .arg("init")
+        .arg(tmp.path().join("projetos"))
+        .assert()
+        .success();
+
+    // Without --path: no PATH column.
+    loops(&home)
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("PATH").not());
+    // With --path: PATH column present and the repo dir shown.
+    loops(&home)
+        .arg("--path")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("PATH"))
+        .stdout(predicate::str::contains("projetos/app"));
+}
+
+#[test]
 fn list_finds_branches_in_bare_worktree_layout() {
     let tmp = tempfile::tempdir().unwrap();
     let home = tmp.path().join("home");

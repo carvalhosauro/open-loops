@@ -709,17 +709,18 @@ struct GateInputs {
 ///
 /// `rusqlite::Connection` is `Send` but `!Sync`, so a single `&Index` cannot be
 /// shared across the parallel scan threads. We therefore keep the cheap SQLite
-/// reads/writes on the calling thread while running ALL git work in parallel —
-/// the same parallelism the pre-index `scan` had. The shape is three phases:
+/// reads/writes on the calling thread while running ALL git work on a bounded
+/// worker pool (`crate::parallel`, capped at ≈`nproc` — #16). The shape is three
+/// phases:
 ///
-/// 1. **Parallel git probes** (`thread::scope`): for every repo, compute the
+/// 1. **Parallel git probes** (bounded pool): for every repo, compute the
 ///    cheap gate inputs (`default_branch_and_sha`, `git_common_dir`,
 ///    `refs_fingerprint`) ONCE. This replaces the old serial `git` fan-out that
 ///    serialized ~2 subprocess spawns per repo on the calling thread.
 /// 2. **Sequential SQLite gate** on the calling thread: one indexed
 ///    `cached_loops` read per repo, using the precomputed inputs. Hits are
 ///    served directly; misses are deferred.
-/// 3. **Parallel recompute** of the misses (`thread::scope`), followed by a
+/// 3. **Parallel recompute** of the misses (bounded pool), followed by a
 ///    sequential write-through that REUSES the already-computed gate inputs
 ///    (no third re-shell of the git values).
 ///
@@ -758,26 +759,16 @@ pub fn scan_indexed(
         return (all, warnings, inventory_updates);
     };
 
-    // Phase 1: compute the cheap gate inputs for every repo IN PARALLEL. This is
-    // the git work the old code ran serially in `try_gate`. Results are
+    // Phase 1: compute the cheap gate inputs for every repo IN PARALLEL, on a
+    // bounded worker pool (#16) rather than one thread per repo. Results are
     // positionally aligned with `repos`; `Err` is a fatal git error reported
     // once. The inputs are reused for both the gate read and the write-through.
-    let gate_inputs: Vec<Result<GateInputs>> = std::thread::scope(|s| {
-        let handles: Vec<_> = repos
-            .iter()
-            .map(|repo| {
-                let path = repo.path.clone();
-                s.spawn(move || compute_gate_inputs(&path))
-            })
-            .collect();
-        handles
-            .into_iter()
-            .map(|h| {
-                h.join()
-                    .unwrap_or_else(|_| Err(anyhow::anyhow!("panic while probing repository")))
-            })
-            .collect()
-    });
+    let gate_inputs: Vec<Result<GateInputs>> = crate::parallel::try_map(
+        &repos,
+        crate::parallel::default_concurrency(),
+        "panic while probing repository",
+        |repo| compute_gate_inputs(&repo.path),
+    );
 
     // Phase 2: sequential SQLite gate read on the calling thread (skipped under
     // `--fresh`, which still recomputes and writes through). Hits are served
@@ -841,23 +832,19 @@ fn recompute_misses(
     warnings: &mut Vec<String>,
 ) -> Vec<InvUpdate> {
     let mut inventory_updates = Vec::new();
-    let results: Vec<Result<(Vec<OpenLoop>, Option<InvUpdate>)>> = std::thread::scope(|s| {
-        let handles: Vec<_> = misses
-            .iter()
-            .map(|repo| {
-                let label = crate::config::label_for_repo(labels, &repo.path);
-                let path = repo.path.clone();
-                s.spawn(move || open_loops(&path, &label, opts))
-            })
-            .collect();
-        handles
-            .into_iter()
-            .map(|h| {
-                h.join()
-                    .unwrap_or_else(|_| Err(anyhow::anyhow!("panic while scanning repository")))
-            })
-            .collect()
-    });
+    // Heavy git phase on the bounded worker pool (#16): at most `nproc` repos are
+    // scanned at once instead of one thread per miss. Results stay positionally
+    // aligned with `misses` so the write-through below can pair each with its
+    // precomputed gate inputs by index.
+    let results: Vec<Result<(Vec<OpenLoop>, Option<InvUpdate>)>> = crate::parallel::try_map(
+        misses,
+        crate::parallel::default_concurrency(),
+        "panic while scanning repository",
+        |repo| {
+            let label = crate::config::label_for_repo(labels, &repo.path);
+            open_loops(&repo.path, &label, opts)
+        },
+    );
 
     for (i, (repo, res)) in misses.iter().zip(results).enumerate() {
         match res {

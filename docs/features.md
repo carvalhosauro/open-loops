@@ -16,6 +16,19 @@ Discovery is layout-agnostic: normal repos, worktrees, and bare stores under you
 configured roots are found automatically. Repo names come from git's common-dir,
 not from worktree folder names.
 
+Add `--path` (or `-p`) to append a `PATH` column with each loop's worktree
+directory. The `LOOP` key stays a stable `root/repo/branch` handle (used by
+`resume`/`ignore`), but in nested git-bare layouts — or when a branch's worktree
+folder differs from its name (`improv/dx` → `improv-dx/`) — that key cannot be
+mapped to a directory by eye. `PATH` gives the real `cd` target,
+`~`-abbreviated:
+
+```bash
+loops --path
+# LOOP                 IDLE  AHEAD  BEHIND  PATH
+# acme-api/improv/dx     5d     15     234  ~/repo/acme/back/acme-api/improv-dx
+```
+
 Scan results are cached in a disposable SQLite index at `~/.open-loops/index.db`.
 When a repo's refs are unchanged since the last run, the cached loops are served
 and the heavy git phase (`for-each-ref`, `branch --merged`, per-branch

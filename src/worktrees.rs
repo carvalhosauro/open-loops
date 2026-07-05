@@ -1,5 +1,5 @@
 //! Worktree inventory: joins `git worktree list` with merged/idle/state signals.
-use crate::scanner::{default_branch, find_repos, git, parse_worktree_porcelain};
+use crate::scanner::{default_branch, find_repos, git, parse_worktree_porcelain, WorktreeEntry};
 use anyhow::Result;
 use chrono::{DateTime, Utc};
 use std::collections::HashSet;
@@ -76,12 +76,25 @@ impl Worktree {
     }
 }
 
-/// Enumerates and classifies a repository's worktrees.
+/// The cheap, once-per-repo context needed to build every `Worktree` of a repo:
+/// its name, the merged-into-default branch set, and the non-bare worktree
+/// entries (in porcelain order — the first is the main checkout). Gathering this
+/// is 1–2 git calls per repo; the expensive per-worktree probes come after.
+struct RepoWtContext {
+    repo_name: String,
+    repo_path: PathBuf,
+    merged_set: HashSet<String>,
+    entries: Vec<WorktreeEntry>,
+}
+
+/// Gathers the per-repo context (`worktree list` + default branch + merged set).
+/// Bare entries are dropped here so downstream indices line up with real
+/// worktrees.
 ///
 /// # Errors
 ///
 /// Returns `Err` if `git worktree list` fails.
-pub fn worktrees(repo: &Path) -> Result<Vec<Worktree>> {
+fn worktree_context(repo: &Path) -> Result<RepoWtContext> {
     let raw = git(repo, &["worktree", "list", "--porcelain"])?;
     let default = default_branch(repo).ok();
     let merged_set: HashSet<String> = match &default {
@@ -101,76 +114,130 @@ pub fn worktrees(repo: &Path) -> Result<Vec<Worktree>> {
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_else(|| repo.display().to_string());
+    let entries = parse_worktree_porcelain(&raw)
+        .into_iter()
+        .filter(|e| !e.bare)
+        .collect();
+    Ok(RepoWtContext {
+        repo_name,
+        repo_path: repo.to_path_buf(),
+        merged_set,
+        entries,
+    })
+}
 
-    let mut out = Vec::new();
-    let mut first = true;
-    for entry in parse_worktree_porcelain(&raw) {
-        if entry.bare {
-            continue;
-        }
-        let wt_path = entry.path;
-        let branch = entry.branch;
-        let prunable = entry.prunable;
-        let is_main = first;
-        first = false;
-
-        let (last_commit, dirty) = if prunable {
-            (None, false)
-        } else {
-            let lc = git(&wt_path, &["log", "-1", "--format=%cI"])
-                .ok()
-                .and_then(|s| DateTime::parse_from_rfc3339(s.trim()).ok())
-                .map(|d| d.with_timezone(&Utc));
-            let status = git(&wt_path, &["status", "--porcelain"]).unwrap_or_default();
-            (lc, !status.trim().is_empty())
-        };
-        let merged = branch
-            .as_ref()
-            .map(|b| merged_set.contains(b))
-            .unwrap_or(false);
-
-        out.push(Worktree {
-            repo_name: repo_name.clone(),
-            repo_path: repo.to_path_buf(),
-            worktree_path: wt_path,
-            branch,
-            last_commit,
-            merged,
-            dirty,
-            prunable,
-            is_main,
-        });
+/// The per-worktree probe: latest commit time + dirty flag, via two git calls
+/// (`log -1`, `status --porcelain`). Prunable entries skip the probe entirely —
+/// their directory is gone. This is the hot path #18 parallelises: it used to
+/// run serially for every worktree of every repo.
+fn probe_worktree(entry: &WorktreeEntry) -> (Option<DateTime<Utc>>, bool) {
+    if entry.prunable {
+        return (None, false);
     }
-    Ok(out)
+    let last_commit = git(&entry.path, &["log", "-1", "--format=%cI"])
+        .ok()
+        .and_then(|s| DateTime::parse_from_rfc3339(s.trim()).ok())
+        .map(|d| d.with_timezone(&Utc));
+    let status = git(&entry.path, &["status", "--porcelain"]).unwrap_or_default();
+    (last_commit, !status.trim().is_empty())
+}
+
+/// Assembles a `Worktree` from its repo context, its position in that repo's
+/// entry list (index 0 is the main checkout), and its probe result.
+fn assemble_worktree(
+    ctx: &RepoWtContext,
+    idx: usize,
+    entry: &WorktreeEntry,
+    (last_commit, dirty): (Option<DateTime<Utc>>, bool),
+) -> Worktree {
+    let merged = entry
+        .branch
+        .as_ref()
+        .map(|b| ctx.merged_set.contains(b))
+        .unwrap_or(false);
+    Worktree {
+        repo_name: ctx.repo_name.clone(),
+        repo_path: ctx.repo_path.clone(),
+        worktree_path: entry.path.clone(),
+        branch: entry.branch.clone(),
+        last_commit,
+        merged,
+        dirty,
+        prunable: entry.prunable,
+        is_main: idx == 0,
+    }
+}
+
+/// Enumerates and classifies a repository's worktrees.
+///
+/// The per-worktree probes (`log -1` + `status`) run on a bounded worker pool
+/// instead of serially (#18), so a repo with many worktrees no longer pays a
+/// strictly serial `2 × N` git round-trips.
+///
+/// # Errors
+///
+/// Returns `Err` if `git worktree list` fails.
+pub fn worktrees(repo: &Path) -> Result<Vec<Worktree>> {
+    let ctx = worktree_context(repo)?;
+    let probes = crate::parallel::try_map(
+        &ctx.entries,
+        crate::parallel::default_concurrency(),
+        "panic while probing worktree",
+        |e| Ok(probe_worktree(e)),
+    );
+    Ok(ctx
+        .entries
+        .iter()
+        .enumerate()
+        .map(|(i, e)| {
+            // `probe_worktree` never errors; a caught panic degrades to (None, false).
+            let probe = probes[i].as_ref().copied().unwrap_or((None, false));
+            assemble_worktree(&ctx, i, e, probe)
+        })
+        .collect())
 }
 
 /// Scans worktrees of all repos found under the roots, in parallel.
 ///
-/// Per-repo failures become warnings, never abort.
+/// Per-repo failures become warnings, never abort. Concurrency is bounded and
+/// applied at a SINGLE level (#16/#18): the per-repo contexts are gathered on
+/// the pool, then EVERY worktree across ALL repos is flattened into one probe
+/// task list and run through the same pool — so a few repos with many worktrees
+/// (or many repos with a few) both saturate the workers without nesting pools.
 pub fn scan_worktrees(roots: &[PathBuf], scan_depth: usize) -> (Vec<Worktree>, Vec<String>) {
     let (repos, mut warnings) = find_repos(roots, scan_depth);
-    let results: Vec<Result<Vec<Worktree>>> = std::thread::scope(|s| {
-        let handles: Vec<_> = repos
-            .iter()
-            .map(|r| {
-                let path = r.path.clone();
-                s.spawn(move || worktrees(&path))
-            })
-            .collect();
-        handles
-            .into_iter()
-            .map(|h| {
-                h.join()
-                    .unwrap_or_else(|_| Err(anyhow::anyhow!("panic while scanning worktrees")))
-            })
-            .collect()
+    let cap = crate::parallel::default_concurrency();
+
+    // Phase 1: gather each repo's cheap context on the bounded pool.
+    let contexts = crate::parallel::try_map(&repos, cap, "panic while scanning worktrees", |r| {
+        worktree_context(&r.path)
     });
-    let mut all = Vec::new();
-    for (repo, res) in repos.iter().zip(results) {
+    let mut good: Vec<RepoWtContext> = Vec::new();
+    for (repo, res) in repos.iter().zip(contexts) {
         match res {
-            Ok(mut w) => all.append(&mut w),
+            Ok(ctx) => good.push(ctx),
             Err(e) => warnings.push(format!("{}: {e:#}", repo.path.display())),
         }
+    }
+
+    // Phase 2: flatten to (context idx, entry idx) probe tasks and run the hot
+    // per-worktree git calls through one bounded pool — no per-repo barrier.
+    let tasks: Vec<(usize, usize)> = good
+        .iter()
+        .enumerate()
+        .flat_map(|(ci, ctx)| (0..ctx.entries.len()).map(move |ei| (ci, ei)))
+        .collect();
+    let probes =
+        crate::parallel::try_map(&tasks, cap, "panic while probing worktree", |&(ci, ei)| {
+            Ok(probe_worktree(&good[ci].entries[ei]))
+        });
+
+    // Reassemble in stable order: repo order, then entry order.
+    let mut all = Vec::with_capacity(tasks.len());
+    for (&(ci, ei), res) in tasks.iter().zip(probes) {
+        let ctx = &good[ci];
+        let probe = res.unwrap_or((None, false));
+        all.push(assemble_worktree(ctx, ei, &ctx.entries[ei], probe));
     }
     (all, warnings)
 }
