@@ -1,6 +1,21 @@
 # Changelog
 ## unreleased
 
+## 1.6.0 - 2026-07-05
+
+### Docs
+- Document --path and the bounded scan/worktree pools
+
+### Features
+- Add --path column to the inventory ([#31](https://github.com/carvalhosauro/open-loops/pull/31))
+
+### Fixes
+- Abbreviate home via component-aware strip_prefix ([#31](https://github.com/carvalhosauro/open-loops/pull/31))
+
+### Performance
+- Probe worktrees on the bounded pool ([#18](https://github.com/carvalhosauro/open-loops/pull/18))
+- Bound scan fan-out with a worker pool ([#16](https://github.com/carvalhosauro/open-loops/pull/16))
+
 ## 1.5.0 - 2026-06-29
 
 ### Docs
