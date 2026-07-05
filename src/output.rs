@@ -3,7 +3,7 @@ use crate::scanner::OpenLoop;
 use crate::worktrees::{Verdict, Worktree};
 use chrono::{DateTime, Utc};
 use std::collections::HashSet;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 /// Converts the difference between `now` and `then` into a human-readable string.
 ///
@@ -25,10 +25,25 @@ pub fn fmt_count(v: Option<u32>) -> String {
     v.map(|n| n.to_string()).unwrap_or_else(|| "-".into())
 }
 
+/// Renders a path for the PATH column, abbreviating the user's home directory to
+/// `~` so nested git-bare worktree paths stay compact (#31).
+fn display_path(p: &Path) -> String {
+    let s = p.display().to_string();
+    if let Some(home) = dirs::home_dir() {
+        let home = home.display().to_string();
+        if !home.is_empty() {
+            if let Some(rest) = s.strip_prefix(&home) {
+                return format!("~{rest}");
+            }
+        }
+    }
+    s
+}
+
 /// Renders a sorted loop inventory table, most idle first (staleness is the attention criterion).
 ///
 /// Returns a celebratory message when the list is empty.
-pub fn render_table(loops: &[OpenLoop], now: DateTime<Utc>) -> String {
+pub fn render_table(loops: &[OpenLoop], now: DateTime<Utc>, show_path: bool) -> String {
     if loops.is_empty() {
         return "No open loops. All finished or ignored.\n".into();
     }
@@ -40,18 +55,28 @@ pub fn render_table(loops: &[OpenLoop], now: DateTime<Utc>) -> String {
         .max()
         .unwrap_or(4)
         .max(4);
-    let mut out = format!(
-        "{:<key_w$}  {:>9}  {:>5}  {:>6}\n",
+    let mut header = format!(
+        "{:<key_w$}  {:>9}  {:>5}  {:>6}",
         "LOOP", "IDLE", "AHEAD", "BEHIND"
     );
+    if show_path {
+        header.push_str("  PATH");
+    }
+    header.push('\n');
+    let mut out = header;
     for l in sorted {
-        out.push_str(&format!(
-            "{:<key_w$}  {:>9}  {:>5}  {:>6}\n",
+        let mut row = format!(
+            "{:<key_w$}  {:>9}  {:>5}  {:>6}",
             l.key(),
             human_age(now, l.last_commit),
             fmt_count(l.ahead),
             fmt_count(l.behind)
-        ));
+        );
+        if show_path {
+            row.push_str(&format!("  {}", display_path(&l.repo_path)));
+        }
+        row.push('\n');
+        out.push_str(&row);
     }
     out
 }
@@ -178,7 +203,7 @@ mod tests {
 
     #[test]
     fn render_table_sorts_most_idle_first() {
-        let t = render_table(&[lp("recente", 1), lp("antiga", 30)], Utc::now());
+        let t = render_table(&[lp("recente", 1), lp("antiga", 30)], Utc::now(), false);
         let pos_antiga = t.find("antiga").unwrap();
         let pos_recente = t.find("recente").unwrap();
         assert!(pos_antiga < pos_recente);
@@ -191,14 +216,28 @@ mod tests {
         let mut l = lp("feat/x", 1);
         l.ahead = None;
         l.behind = None;
-        let t = render_table(&[l], Utc::now());
+        let t = render_table(&[l], Utc::now(), false);
         let line = t.lines().find(|ln| ln.contains("feat/x")).unwrap();
         assert!(line.contains("  -  "), "expected dashes in: {line}");
     }
 
     #[test]
     fn render_table_empty_celebrates() {
-        assert!(render_table(&[], Utc::now()).contains("No open loops"));
+        assert!(render_table(&[], Utc::now(), false).contains("No open loops"));
+    }
+
+    #[test]
+    fn render_table_no_path_column_by_default() {
+        let t = render_table(&[lp("feat/x", 1)], Utc::now(), false);
+        assert!(!t.contains("PATH"));
+    }
+
+    #[test]
+    fn render_table_path_column_shows_repo_path() {
+        let t = render_table(&[lp("feat/x", 1)], Utc::now(), true);
+        let header = t.lines().next().unwrap();
+        assert!(header.contains("PATH"));
+        assert!(t.lines().any(|ln| ln.contains("/tmp/app")));
     }
 
     fn wt(branch: &str, merged: bool, dirty: bool, idade_dias: i64) -> Worktree {

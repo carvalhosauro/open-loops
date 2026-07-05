@@ -221,7 +221,7 @@ fn gather_resume_evidence(base: &Path, lp: &OpenLoop) -> Result<ResumeEvidence> 
 
 /// Backs `loops [query]`: persists any `@context` switch, scans the matching
 /// repos, and renders the inventory table to stdout.
-pub fn run_list(base: &Path, query: &str, fresh: bool) -> Result<()> {
+pub fn run_list(base: &Path, query: &str, fresh: bool, show_path: bool) -> Result<()> {
     let (_store, cfg) = load_cfg_with_roots(base)?;
     let mut plan = resolve_plan_persisting(base, &cfg, query)?;
     plan.need_ahead_behind = true; // table always renders AHEAD/BEHIND columns
@@ -255,7 +255,7 @@ pub fn run_list(base: &Path, query: &str, fresh: bool) -> Result<()> {
         eprintln!("No loops match: {query}");
         eprintln!("(hint: run `loops` to list all)");
     }
-    print!("{}", output::render_table(&visible, now));
+    print!("{}", output::render_table(&visible, now, show_path));
     Ok(())
 }
 

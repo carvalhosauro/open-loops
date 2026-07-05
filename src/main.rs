@@ -6,7 +6,7 @@ fn main() {
     let cli = Cli::parse();
     let base = base_dir();
     let result = match cli.command {
-        None => cli::run_list(&base, &cli.query.join(" "), cli.fresh),
+        None => cli::run_list(&base, &cli.query.join(" "), cli.fresh, cli.path),
         Some(Command::Init { paths }) => cli::run_init(&base, &paths),
         Some(Command::Resume {
             query,

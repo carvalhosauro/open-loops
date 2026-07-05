@@ -14,6 +14,9 @@ pub struct Cli {
     /// Ignore cached inventory memo and recompute ahead/behind from git
     #[arg(long)]
     pub fresh: bool,
+    /// Show a PATH column with each loop's worktree directory (for `cd`)
+    #[arg(long, short = 'p')]
+    pub path: bool,
 }
 
 #[derive(Subcommand)]
