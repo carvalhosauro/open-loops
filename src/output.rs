@@ -27,17 +27,20 @@ pub fn fmt_count(v: Option<u32>) -> String {
 
 /// Renders a path for the PATH column, abbreviating the user's home directory to
 /// `~` so nested git-bare worktree paths stay compact (#31).
+///
+/// Uses `Path::strip_prefix`, which matches on whole path components — so a
+/// sibling like `~/../gustavo-backup` is never mistaken for a child of home
+/// (a plain string prefix would), and the platform separator is preserved.
 fn display_path(p: &Path) -> String {
-    let s = p.display().to_string();
     if let Some(home) = dirs::home_dir() {
-        let home = home.display().to_string();
-        if !home.is_empty() {
-            if let Some(rest) = s.strip_prefix(&home) {
-                return format!("~{rest}");
+        if let Ok(rest) = p.strip_prefix(&home) {
+            if rest.as_os_str().is_empty() {
+                return "~".to_string();
             }
+            return Path::new("~").join(rest).display().to_string();
         }
     }
-    s
+    p.display().to_string()
 }
 
 /// Renders a sorted loop inventory table, most idle first (staleness is the attention criterion).
@@ -238,6 +241,23 @@ mod tests {
         let header = t.lines().next().unwrap();
         assert!(header.contains("PATH"));
         assert!(t.lines().any(|ln| ln.contains("/tmp/app")));
+    }
+
+    #[test]
+    fn display_path_abbreviates_home_on_component_boundary_only() {
+        let Some(home) = dirs::home_dir() else {
+            return; // no home resolvable in this environment — nothing to assert
+        };
+        // A path under home is abbreviated with the platform separator.
+        let under = home.join("repo").join("app");
+        let expected = std::path::Path::new("~").join("repo").join("app");
+        assert_eq!(display_path(&under), expected.display().to_string());
+        // Home itself collapses to "~".
+        assert_eq!(display_path(&home), "~");
+        // A sibling that only shares a string prefix (not a whole component) is
+        // NOT under home, so it is left untouched — the component-aware guard.
+        let sibling = PathBuf::from(format!("{}-backup", home.display()));
+        assert_eq!(display_path(&sibling), sibling.display().to_string());
     }
 
     fn wt(branch: &str, merged: bool, dirty: bool, idade_dias: i64) -> Worktree {
