@@ -1,8 +1,10 @@
 //! Runtime state at `<base>/state.toml` (separate from declarative `config.toml`).
 //! Holds the active `@context` chosen via the CLI.
-use anyhow::{Context, Result};
+use crate::error::StateError;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
+
+type Result<T> = std::result::Result<T, StateError>;
 
 #[derive(Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
 struct StateFile {
@@ -23,10 +25,15 @@ impl State {
     pub fn load(base: &Path) -> Result<Self> {
         let path = base.join("state.toml");
         if path.exists() {
-            let raw = std::fs::read_to_string(&path)
-                .with_context(|| format!("reading {}", path.display()))?;
-            let file: StateFile = toml::from_str(&raw)
-                .with_context(|| format!("invalid state.toml at {}", path.display()))?;
+            let raw = std::fs::read_to_string(&path).map_err(|source| StateError::ReadFailed {
+                path: path.clone(),
+                source,
+            })?;
+            let file: StateFile =
+                toml::from_str(&raw).map_err(|source| StateError::InvalidStateToml {
+                    path: path.clone(),
+                    source,
+                })?;
             return Ok(Self {
                 path,
                 current_context: file.current_context,
@@ -57,8 +64,8 @@ impl State {
     }
 
     fn save(&self) -> Result<()> {
-        let parent = self.path.parent().ok_or_else(|| {
-            anyhow::anyhow!("path has no parent directory: {}", self.path.display())
+        let parent = self.path.parent().ok_or_else(|| StateError::NoParentDir {
+            path: self.path.clone(),
         })?;
         std::fs::create_dir_all(parent)?;
         let file = StateFile {
@@ -74,10 +81,18 @@ fn legacy_context_from_config(base: &Path) -> Result<Option<String>> {
     let raw = match std::fs::read_to_string(&config_path) {
         Ok(s) => s,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(e) => return Err(e).context(format!("reading {}", config_path.display())),
+        Err(source) => {
+            return Err(StateError::ReadFailed {
+                path: config_path,
+                source,
+            })
+        }
     };
-    let table: toml::Value = toml::from_str(&raw)
-        .with_context(|| format!("invalid config.toml at {}", config_path.display()))?;
+    let table: toml::Value =
+        toml::from_str(&raw).map_err(|source| StateError::InvalidConfigToml {
+            path: config_path.clone(),
+            source,
+        })?;
     Ok(table
         .get("current_context")
         .or_else(|| table.get("default_context"))

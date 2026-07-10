@@ -26,12 +26,6 @@ pub trait PanicRecover: Send + 'static {
     fn from_worker_panic(msg: &'static str) -> Self;
 }
 
-impl PanicRecover for anyhow::Error {
-    fn from_worker_panic(msg: &'static str) -> Self {
-        anyhow::anyhow!(msg)
-    }
-}
-
 impl PanicRecover for GitError {
     fn from_worker_panic(msg: &'static str) -> Self {
         GitError::WorkerPanic(msg)
@@ -57,8 +51,8 @@ pub fn default_concurrency() -> usize {
 /// ALIGNED with `items`.
 ///
 /// `f` returns `Result<R>`. A panic inside `f` for one item is caught and mapped
-/// to `Err(anyhow!(panic_msg))` for THAT item only — every other item still
-/// produces its result. This preserves the driver contract that a single
+/// to `Err(E::from_worker_panic(panic_msg))` for THAT item only — every other
+/// item still produces its result. This preserves the driver contract that a single
 /// misbehaving repo becomes a warning, never an aborted scan (see the tolerance
 /// rules in `docs/architecture/01-discovery.md`).
 ///
@@ -139,14 +133,14 @@ mod tests {
 
     #[test]
     fn empty_input_returns_empty() {
-        let out = try_map::<u32, u32, anyhow::Error, _>(&[], 4, "x", |_| Ok(0));
+        let out = try_map::<u32, u32, GitError, _>(&[], 4, "x", |_| Ok(0));
         assert!(out.is_empty());
     }
 
     #[test]
     fn results_are_positionally_aligned() {
         let items: Vec<usize> = (0..100).collect();
-        let out = try_map(&items, 8, "panic", |&v| Ok::<_, anyhow::Error>(v * 2));
+        let out = try_map(&items, 8, "panic", |&v| Ok::<_, GitError>(v * 2));
         assert_eq!(out.len(), 100);
         for (i, r) in out.iter().enumerate() {
             assert_eq!(*r.as_ref().unwrap(), i * 2, "slot {i} misaligned");
@@ -165,7 +159,7 @@ mod tests {
             // Hold the slot briefly so overlap is observable.
             std::thread::sleep(Duration::from_millis(2));
             live.fetch_sub(1, Ordering::SeqCst);
-            Ok::<_, anyhow::Error>(())
+            Ok::<_, GitError>(())
         });
         assert_eq!(out.len(), 64);
         assert!(
@@ -180,7 +174,7 @@ mod tests {
         // Fewer items than the cap must not spawn idle workers past the count,
         // and the results must still be complete and aligned.
         let items = [10usize, 20, 30];
-        let out = try_map(&items, 64, "panic", |&v| Ok::<_, anyhow::Error>(v + 1));
+        let out = try_map(&items, 64, "panic", |&v| Ok::<_, GitError>(v + 1));
         assert_eq!(
             out.iter().map(|r| *r.as_ref().unwrap()).collect::<Vec<_>>(),
             vec![11, 21, 31]
@@ -194,7 +188,7 @@ mod tests {
             if v == 5 {
                 panic!("intentional test panic");
             }
-            Ok::<_, anyhow::Error>(v)
+            Ok::<_, GitError>(v)
         });
         for (i, r) in out.iter().enumerate() {
             if i == 5 {
@@ -213,7 +207,9 @@ mod tests {
             if v % 2 == 0 {
                 Ok(v)
             } else {
-                Err(anyhow::anyhow!("odd {v}"))
+                Err(GitError::NoCommitDates {
+                    branch: format!("odd {v}"),
+                })
             }
         });
         assert!(out[0].is_ok());

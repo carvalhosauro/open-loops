@@ -5,15 +5,17 @@ pub use cli_command::{Cli, Command};
 
 use crate::config::Store;
 use crate::distill::Confidence;
+use crate::error::{CliError, OpenLoopsError};
 use crate::ignores::Ignores;
 use crate::index::Index;
 use crate::inventory::InventoryStore;
 use crate::scanner::{self, OpenLoop, ScanOptions};
 use crate::state::State;
 use crate::{cache, distill, output, sessions, worktrees};
-use anyhow::{bail, ensure, Result};
 use sessions::SessionExcerpt;
 use std::path::{Path, PathBuf};
+
+type Result<T> = std::result::Result<T, OpenLoopsError>;
 
 struct ResumeEvidence {
     default_branch: String,
@@ -38,10 +40,9 @@ fn progress(msg: &str) {
 fn load_cfg_with_roots(base: &Path) -> Result<(Store, crate::config::Config)> {
     let store = Store::new(base.to_path_buf());
     let cfg = store.load()?;
-    ensure!(
-        !cfg.roots.is_empty(),
-        "no roots configured. Run: loops init <dir-with-your-repos>"
-    );
+    if cfg.roots.is_empty() {
+        return Err(CliError::NoRootsConfigured.into());
+    }
     Ok((store, cfg))
 }
 
@@ -173,16 +174,19 @@ fn resolve_loop(base: &Path, query: &str, fresh: bool) -> Result<OpenLoop> {
         })
         .collect();
     match matches.len() {
-        0 => bail!("no loop matches '{query}'. Run `loops` to see open ones."),
+        0 => Err(CliError::NoLoopMatches {
+            query: query.to_string(),
+        }
+        .into()),
         1 => Ok(matches[0].clone()),
-        _ => bail!(
-            "ambiguous query, candidates:\n{}",
-            matches
+        _ => Err(CliError::AmbiguousQuery {
+            candidates: matches
                 .iter()
                 .map(|l| format!("  {}", l.key()))
                 .collect::<Vec<_>>()
-                .join("\n")
-        ),
+                .join("\n"),
+        }
+        .into()),
     }
 }
 
@@ -262,7 +266,9 @@ pub fn run_list(base: &Path, query: &str, fresh: bool, show_path: bool) -> Resul
 /// Backs `loops init`: registers repository roots in the config so later scans
 /// know where to look.
 pub fn run_init(base: &Path, paths: &[PathBuf]) -> Result<()> {
-    ensure!(!paths.is_empty(), "usage: loops init <dir> [<dir>...]");
+    if paths.is_empty() {
+        return Err(CliError::InitMissingPaths.into());
+    }
     let store = Store::new(base.to_path_buf());
     let cfg = store.add_roots(paths)?;
     println!("roots registered:");
@@ -276,10 +282,9 @@ pub fn run_init(base: &Path, paths: &[PathBuf]) -> Result<()> {
 /// Backs `loops ignore`: persists a `repo/branch` key to the ignore list so it
 /// no longer surfaces as an open loop.
 pub fn run_ignore(base: &Path, key: &str) -> Result<()> {
-    ensure!(
-        key.contains('/'),
-        "expected format: repo/branch (run `loops` to see the keys)"
-    );
+    if !key.contains('/') {
+        return Err(CliError::IgnoreKeyMissingSlash.into());
+    }
     let mut ignores = Ignores::load(base)?;
     ignores.add(key)?;
     println!("ignored: {key}");

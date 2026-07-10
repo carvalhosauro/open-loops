@@ -1,7 +1,8 @@
 //! Typed error types for the library's public API (anyhow -> thiserror
 //! migration, see docs/architecture ADRs). Domains are added incrementally;
-//! `query.rs` is the first (spec 4.1a), `scanner.rs` the second (4.1b), and
-//! config/cache/distill/sessions/ignores/index the third (4.1c).
+//! `query.rs` is the first (spec 4.1a), `scanner.rs` the second (4.1b),
+//! config/cache/distill/sessions/ignores/index the third (4.1c), and
+//! cli/inventory/state the fourth and final (4.1d).
 use std::path::PathBuf;
 
 use thiserror::Error;
@@ -212,6 +213,75 @@ pub enum IndexError {
     IntegrityCheckFailed(String),
 }
 
+/// Errors from the ahead/behind memo store (`src/inventory.rs`).
+#[derive(Debug, Error)]
+pub enum InventoryError {
+    #[error("creating inventory dir {}", path.display())]
+    CreateDirFailed {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+
+    #[error("serialising inventory file")]
+    Serialize(#[source] serde_json::Error),
+
+    #[error("writing tmp inventory {}", path.display())]
+    WriteFailed {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+
+    #[error("renaming inventory tmp to {}", path.display())]
+    RenameFailed {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+
+    #[error("reading inventory dir {}", path.display())]
+    ReadDirFailed {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+}
+
+/// Errors from `<base>/state.toml` (`src/state.rs`).
+#[derive(Debug, Error)]
+pub enum StateError {
+    #[error("reading {}", path.display())]
+    ReadFailed {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+
+    #[error("invalid state.toml at {}", path.display())]
+    InvalidStateToml {
+        path: PathBuf,
+        #[source]
+        source: toml::de::Error,
+    },
+
+    #[error("invalid config.toml at {}", path.display())]
+    InvalidConfigToml {
+        path: PathBuf,
+        #[source]
+        source: toml::de::Error,
+    },
+
+    #[error("path has no parent directory: {}", path.display())]
+    NoParentDir { path: PathBuf },
+
+    #[error(transparent)]
+    Io(#[from] std::io::Error),
+
+    #[error(transparent)]
+    TomlSer(#[from] toml::ser::Error),
+}
+
 /// Errors from git shell-out in `src/scanner.rs`.
 #[derive(Debug, Error)]
 pub enum GitError {
@@ -246,6 +316,26 @@ pub enum GitError {
     WorkerPanic(&'static str),
 }
 
+/// Errors raised directly at the CLI boundary (`src/cli.rs`) that don't
+/// belong to any lower domain — user-input validation and "no match" outcomes.
+#[derive(Debug, Error)]
+pub enum CliError {
+    #[error("no roots configured. Run: loops init <dir-with-your-repos>")]
+    NoRootsConfigured,
+
+    #[error("usage: loops init <dir> [<dir>...]")]
+    InitMissingPaths,
+
+    #[error("expected format: repo/branch (run `loops` to see the keys)")]
+    IgnoreKeyMissingSlash,
+
+    #[error("no loop matches '{query}'. Run `loops` to see open ones.")]
+    NoLoopMatches { query: String },
+
+    #[error("ambiguous query, candidates:\n{candidates}")]
+    AmbiguousQuery { candidates: String },
+}
+
 /// Top-level error for the library's public API. Domains are added one per
 /// migration task.
 #[derive(Debug, Error)]
@@ -266,5 +356,10 @@ pub enum OpenLoopsError {
     Ignore(#[from] IgnoreError),
     #[error(transparent)]
     Index(#[from] IndexError),
-    // cli.rs (Task 4) stays on anyhow.
+    #[error(transparent)]
+    Inventory(#[from] InventoryError),
+    #[error(transparent)]
+    State(#[from] StateError),
+    #[error(transparent)]
+    Cli(#[from] CliError),
 }
