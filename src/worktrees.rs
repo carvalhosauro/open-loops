@@ -1,5 +1,5 @@
 //! Worktree inventory: joins `git worktree list` with merged/idle/state signals.
-use crate::error::GitError;
+use crate::error::{error_chain, GitError};
 use crate::scanner::{default_branch, find_repos, git, parse_worktree_porcelain, WorktreeEntry};
 use chrono::{DateTime, Utc};
 use std::collections::HashSet;
@@ -218,7 +218,7 @@ pub fn scan_worktrees(roots: &[PathBuf], scan_depth: usize) -> (Vec<Worktree>, V
     for (repo, res) in repos.iter().zip(contexts) {
         match res {
             Ok(ctx) => good.push(ctx),
-            Err(e) => warnings.push(format!("{}: {e:#}", repo.path.display())),
+            Err(e) => warnings.push(format!("{}: {}", repo.path.display(), error_chain(&e))),
         }
     }
 

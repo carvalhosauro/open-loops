@@ -5,7 +5,7 @@ pub use cli_command::{Cli, Command};
 
 use crate::config::Store;
 use crate::distill::Confidence;
-use crate::error::{CliError, OpenLoopsError};
+use crate::error::{error_chain, CliError, OpenLoopsError};
 use crate::ignores::Ignores;
 use crate::index::Index;
 use crate::inventory::InventoryStore;
@@ -96,8 +96,9 @@ fn write_inventory(
     for (hash, file) in updates {
         if let Err(e) = inv_store.save(&hash, &file) {
             eprintln!(
-                "warning: failed to write inventory for {}: {e:#}",
-                file.repo_path.display()
+                "warning: failed to write inventory for {}: {}",
+                file.repo_path.display(),
+                error_chain(&e)
             );
         }
     }

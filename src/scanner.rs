@@ -1,7 +1,7 @@
 //! Repository and unmerged-branch discovery via git shell-out.
 //! Design decision: shell-out (not git2/gix) — simple and debuggable;
 //! the product performance bottleneck is the LLM, not git.
-use crate::error::GitError;
+use crate::error::{error_chain, GitError};
 use chrono::{DateTime, Utc};
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -367,7 +367,7 @@ fn dedup_candidates_cached(
                 });
             }
             Err(e) => {
-                warnings.push(format!("{}: {e:#}", candidate.display()));
+                warnings.push(format!("{}: {}", candidate.display(), error_chain(&e)));
             }
         }
     }
@@ -497,8 +497,9 @@ pub fn open_loops_indexed(
     }
     let worktrees = worktree_map(repo).unwrap_or_else(|e| {
         eprintln!(
-            "warning: git worktree list failed in {}: {e:#}; session matching falls back to the repo path",
-            repo.display()
+            "warning: git worktree list failed in {}: {}; session matching falls back to the repo path",
+            repo.display(),
+            error_chain(&e)
         );
         std::collections::HashMap::new()
     });
@@ -783,7 +784,7 @@ pub fn scan_indexed(
             Ok(i) => i,
             // Propagate the git error so the repo is reported once, not retried.
             Err(e) => {
-                warnings.push(format!("{}: {e:#}", repo.path.display()));
+                warnings.push(format!("{}: {}", repo.path.display(), error_chain(&e)));
                 continue;
             }
         };
@@ -864,7 +865,7 @@ fn recompute_misses(
                     inventory_updates.push(update);
                 }
             }
-            Err(e) => warnings.push(format!("{}: {e:#}", repo.path.display())),
+            Err(e) => warnings.push(format!("{}: {}", repo.path.display(), error_chain(&e))),
         }
     }
     inventory_updates

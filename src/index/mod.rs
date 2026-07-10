@@ -8,7 +8,7 @@
 //! Schema is set to `user_version = 1` after the initial migration. Callers
 //! in later tasks wire read/write logic on top of the tables created here.
 
-use crate::error::IndexError;
+use crate::error::{error_chain, IndexError};
 use chrono::{DateTime, TimeZone, Utc};
 use rusqlite::{Connection, OpenFlags};
 use std::path::{Path, PathBuf};
@@ -53,14 +53,18 @@ impl Index {
         match Self::try_open_disk(&db_path) {
             Ok(index) => index,
             Err(e) => {
-                eprintln!("warning: index open/migrate failed ({e:#}); rebuilding");
+                eprintln!(
+                    "warning: index open/migrate failed ({}); rebuilding",
+                    error_chain(&e)
+                );
                 Self::delete_db_files(base);
                 match Self::try_open_disk(&db_path) {
                     Ok(index) => index,
                     Err(e2) => {
                         eprintln!(
-                            "warning: index rebuild also failed ({e2:#}); \
-                             falling back to in-memory index"
+                            "warning: index rebuild also failed ({}); \
+                             falling back to in-memory index",
+                            error_chain(&e2)
                         );
                         // In-memory fallback so the command still runs.
                         Self::open_in_memory()
@@ -104,7 +108,10 @@ impl Index {
             Ok(pair) => Some(pair),
             Err(rusqlite::Error::QueryReturnedNoRows) => None,
             Err(e) => {
-                eprintln!("warning: index cached_common_dir query failed: {e:#}");
+                eprintln!(
+                    "warning: index cached_common_dir query failed: {}",
+                    error_chain(&e)
+                );
                 None
             }
         }
@@ -124,7 +131,10 @@ impl Index {
                  common_dir      = excluded.common_dir",
             rusqlite::params![common_dir_hash, path_str.as_ref(), cd_str.as_ref()],
         ) {
-            eprintln!("warning: index put_repo_common_dir failed: {e:#}");
+            eprintln!(
+                "warning: index put_repo_common_dir failed: {}",
+                error_chain(&e)
+            );
         }
     }
 
@@ -162,7 +172,10 @@ impl Index {
             Ok(g) => g,
             Err(rusqlite::Error::QueryReturnedNoRows) => return None,
             Err(e) => {
-                eprintln!("warning: index cached_loops gate query failed: {e:#}");
+                eprintln!(
+                    "warning: index cached_loops gate query failed: {}",
+                    error_chain(&e)
+                );
                 return None;
             }
         };
@@ -179,7 +192,10 @@ impl Index {
         ) {
             Ok(s) => s,
             Err(e) => {
-                eprintln!("warning: index cached_loops prepare failed: {e:#}");
+                eprintln!(
+                    "warning: index cached_loops prepare failed: {}",
+                    error_chain(&e)
+                );
                 return None;
             }
         };
@@ -207,14 +223,20 @@ impl Index {
         let rows = match rows {
             Ok(mapped) => mapped.collect::<Result<Vec<_>, _>>(),
             Err(e) => {
-                eprintln!("warning: index cached_loops query failed: {e:#}");
+                eprintln!(
+                    "warning: index cached_loops query failed: {}",
+                    error_chain(&e)
+                );
                 return None;
             }
         };
         match rows {
             Ok(v) => Some(v),
             Err(e) => {
-                eprintln!("warning: index cached_loops row decode failed: {e:#}");
+                eprintln!(
+                    "warning: index cached_loops row decode failed: {}",
+                    error_chain(&e)
+                );
                 None
             }
         }
@@ -246,7 +268,7 @@ impl Index {
             refs_fp,
             rows,
         ) {
-            eprintln!("warning: index put_loops failed: {e:#}");
+            eprintln!("warning: index put_loops failed: {}", error_chain(&e));
         }
     }
 
@@ -347,7 +369,7 @@ impl Index {
     /// window, I-2). On any index error, prints a warning and continues.
     pub fn upsert_session(&self, path: &Path, repo_path: &Path, mtime: i64, size: i64, text: &str) {
         if let Err(e) = self.upsert_session_inner(path, repo_path, mtime, size, text) {
-            eprintln!("warning: index upsert_session failed: {e:#}");
+            eprintln!("warning: index upsert_session failed: {}", error_chain(&e));
         }
     }
 
@@ -437,7 +459,10 @@ impl Index {
         match self.session_mentions_inner(repo_path, branch) {
             Ok(set) => set,
             Err(e) => {
-                eprintln!("warning: index session_mentions failed: {e:#}");
+                eprintln!(
+                    "warning: index session_mentions failed: {}",
+                    error_chain(&e)
+                );
                 std::collections::HashSet::new()
             }
         }
@@ -488,7 +513,10 @@ impl Index {
     /// truth; the index is disposable).
     pub fn prune_missing_repos(&self) {
         if let Err(e) = self.prune_missing_repos_inner() {
-            eprintln!("warning: index prune_missing_repos failed: {e:#}");
+            eprintln!(
+                "warning: index prune_missing_repos failed: {}",
+                error_chain(&e)
+            );
         }
     }
 
@@ -693,7 +721,11 @@ impl Index {
                 Ok(()) => {}
                 Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
                 Err(e) => {
-                    eprintln!("warning: failed to remove {}: {e:#}", path.display());
+                    eprintln!(
+                        "warning: failed to remove {}: {}",
+                        path.display(),
+                        error_chain(&e)
+                    );
                 }
             }
         }

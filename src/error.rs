@@ -7,6 +7,22 @@ use std::path::PathBuf;
 
 use thiserror::Error;
 
+/// Formats an error followed by its whole `source()` chain, joined with
+/// `": "` — the shape `anyhow` prints for `{:#}`. Print boundaries (the CLI
+/// edge in `main.rs`, scan/index warnings) must use this instead of bare
+/// `Display`, and messages must not interpolate their own `#[source]`,
+/// otherwise the cause is either lost or printed twice.
+pub fn error_chain(e: &(dyn std::error::Error + 'static)) -> String {
+    use std::fmt::Write;
+    let mut out = e.to_string();
+    let mut src = e.source();
+    while let Some(s) = src {
+        let _ = write!(out, ": {s}");
+        src = s.source();
+    }
+    out
+}
+
 /// Errors from parsing and resolving queries (`src/query.rs`).
 #[derive(Debug, Error)]
 pub enum QueryError {
@@ -180,33 +196,33 @@ pub enum IgnoreError {
 /// typed instead of `anyhow`.
 #[derive(Debug, Error)]
 pub enum IndexError {
-    #[error("creating index dir {}: {source}", path.display())]
+    #[error("creating index dir {}", path.display())]
     CreateDirFailed {
         path: PathBuf,
         #[source]
         source: std::io::Error,
     },
 
-    #[error("opening {}: {source}", path.display())]
+    #[error("opening {}", path.display())]
     OpenFailed {
         path: PathBuf,
         #[source]
         source: rusqlite::Error,
     },
 
-    #[error("applying pragmas: {0}")]
+    #[error("applying pragmas")]
     Pragma(#[source] rusqlite::Error),
 
-    #[error("reading user_version: {0}")]
+    #[error("reading user_version")]
     ReadUserVersion(#[source] rusqlite::Error),
 
-    #[error("migrating v1→v2 (FTS heal): {0}")]
+    #[error("migrating v1→v2 (FTS heal)")]
     MigrateV1ToV2(#[source] rusqlite::Error),
 
-    #[error("creating schema v1: {0}")]
+    #[error("creating schema v1")]
     CreateSchemaV1(#[source] rusqlite::Error),
 
-    #[error("integrity_check query failed: {0}")]
+    #[error("integrity_check query failed")]
     IntegrityCheckQuery(#[source] rusqlite::Error),
 
     #[error("integrity_check: {0}")]

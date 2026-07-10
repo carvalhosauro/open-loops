@@ -4,7 +4,7 @@
 //! `~/.open-loops/inventory/<fnv64hex>.json`. The heavy git phase
 //! (`rev-list`) is memoised per `(branch, head_sha, ab_base_sha)` pair.
 //! Reads are tolerant; writes are atomic (tmp → rename).
-use crate::error::InventoryError;
+use crate::error::{error_chain, InventoryError};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
@@ -59,8 +59,9 @@ impl InventoryStore {
             Ok(f) => Some(f),
             Err(e) => {
                 eprintln!(
-                    "warning: corrupt inventory file {}: {e:#}; ignoring",
-                    path.display()
+                    "warning: corrupt inventory file {}: {}; ignoring",
+                    path.display(),
+                    error_chain(&e)
                 );
                 None
             }
@@ -138,8 +139,9 @@ impl InventoryStore {
                 // A concurrent prune already removed it — not worth a warning.
                 Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
                 Err(e) => eprintln!(
-                    "warning: failed to remove {reason} inventory {}: {e:#}",
-                    path.display()
+                    "warning: failed to remove {reason} inventory {}: {}",
+                    path.display(),
+                    error_chain(&e)
                 ),
             }
         }
