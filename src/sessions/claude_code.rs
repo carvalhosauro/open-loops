@@ -2,10 +2,12 @@
 //! WARNING: internal Claude Code format, not a public API — may change.
 //! Parsing is therefore tolerant: a bad line is skipped, never aborts (spec risk 1).
 use super::{SessionExcerpt, SessionSource};
+use crate::error::SessionError;
 use crate::index::Index;
-use anyhow::Result;
 use chrono::{DateTime, Duration, Utc};
 use std::path::{Path, PathBuf};
+
+type Result<T> = std::result::Result<T, SessionError>;
 
 pub struct ClaudeCode {
     pub projects_dir: PathBuf,

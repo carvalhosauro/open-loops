@@ -1,9 +1,11 @@
 //! Worktree inventory: joins `git worktree list` with merged/idle/state signals.
+use crate::error::GitError;
 use crate::scanner::{default_branch, find_repos, git, parse_worktree_porcelain, WorktreeEntry};
-use anyhow::Result;
 use chrono::{DateTime, Utc};
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
+
+type Result<T> = std::result::Result<T, GitError>;
 
 /// Cleanup classification of a worktree.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -183,7 +185,7 @@ pub fn worktrees(repo: &Path) -> Result<Vec<Worktree>> {
         &ctx.entries,
         crate::parallel::default_concurrency(),
         "panic while probing worktree",
-        |e| Ok::<_, anyhow::Error>(probe_worktree(e)),
+        |e| Ok::<_, GitError>(probe_worktree(e)),
     );
     Ok(ctx
         .entries
@@ -229,7 +231,7 @@ pub fn scan_worktrees(roots: &[PathBuf], scan_depth: usize) -> (Vec<Worktree>, V
         .collect();
     let probes =
         crate::parallel::try_map(&tasks, cap, "panic while probing worktree", |&(ci, ei)| {
-            Ok::<_, anyhow::Error>(probe_worktree(&good[ci].entries[ei]))
+            Ok::<_, GitError>(probe_worktree(&good[ci].entries[ei]))
         });
 
     // Reassemble in stable order: repo order, then entry order.

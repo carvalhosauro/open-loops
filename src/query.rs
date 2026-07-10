@@ -245,9 +245,7 @@ pub fn resolve_plan(
 
     if !has_at {
         if let Some(ctx) = opts.current_context {
-            let filter = cfg
-                .context_filter(ctx)
-                .map_err(|e| QueryError::UnknownContext(e.to_string()))?;
+            let filter = cfg.context_filter(ctx)?;
             validate_context_filter(ctx, filter)?;
             plans.push(parse(filter)?);
         }
@@ -259,9 +257,7 @@ pub fn resolve_plan(
             if is_context_reset(name) {
                 continue;
             }
-            let filter = cfg
-                .context_filter(name)
-                .map_err(|e| QueryError::UnknownContext(e.to_string()))?;
+            let filter = cfg.context_filter(name)?;
             validate_context_filter(name, filter)?;
             plans.push(parse(filter)?);
         } else {
@@ -570,7 +566,11 @@ mod tests {
         };
         let err = resolve_plan("@missing", &cfg, &opts).unwrap_err();
         assert!(
-            matches!(err, QueryError::UnknownContext(ref m) if m.contains("unknown context '@missing'")),
+            matches!(
+                err,
+                QueryError::Config(crate::error::ConfigError::UnknownContext { ref name })
+                    if name == "missing"
+            ),
             "got: {err:?}"
         );
     }

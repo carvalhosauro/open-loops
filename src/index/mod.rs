@@ -8,6 +8,7 @@
 //! Schema is set to `user_version = 1` after the initial migration. Callers
 //! in later tasks wire read/write logic on top of the tables created here.
 
+use crate::error::IndexError;
 use chrono::{DateTime, TimeZone, Utc};
 use rusqlite::{Connection, OpenFlags};
 use std::path::{Path, PathBuf};
@@ -532,11 +533,13 @@ impl Index {
 
     /// Attempts to open the db at `path`, apply pragmas, run migrations, and
     /// verify integrity. Returns an error string on any failure.
-    fn try_open_disk(db_path: &Path) -> Result<Self, anyhow::Error> {
+    fn try_open_disk(db_path: &Path) -> Result<Self, IndexError> {
         // Ensure the parent directory exists.
         if let Some(parent) = db_path.parent() {
-            std::fs::create_dir_all(parent)
-                .map_err(|e| anyhow::anyhow!("creating index dir {}: {e}", parent.display()))?;
+            std::fs::create_dir_all(parent).map_err(|source| IndexError::CreateDirFailed {
+                path: parent.to_path_buf(),
+                source,
+            })?;
         }
 
         let conn = Connection::open_with_flags(
@@ -545,7 +548,10 @@ impl Index {
                 | OpenFlags::SQLITE_OPEN_CREATE
                 | OpenFlags::SQLITE_OPEN_NO_MUTEX,
         )
-        .map_err(|e| anyhow::anyhow!("opening {}: {e}", db_path.display()))?;
+        .map_err(|source| IndexError::OpenFailed {
+            path: db_path.to_path_buf(),
+            source,
+        })?;
 
         let mut index = Self { conn };
         index.apply_pragmas()?;
@@ -555,10 +561,10 @@ impl Index {
     }
 
     /// Sets WAL mode and enables foreign keys.
-    fn apply_pragmas(&mut self) -> Result<(), anyhow::Error> {
+    fn apply_pragmas(&mut self) -> Result<(), IndexError> {
         self.conn
             .execute_batch("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;")
-            .map_err(|e| anyhow::anyhow!("applying pragmas: {e}"))
+            .map_err(IndexError::Pragma)
     }
 
     /// Reads `user_version` and applies all pending migrations in order.
@@ -567,11 +573,11 @@ impl Index {
     /// * `user_version = 1` → stale contentless `sessions_fts` from an intermediate
     ///   build of this branch; v1→v2 migration drops and recreates it contentful.
     /// * `user_version ≥ 2` → up to date; no-op.
-    fn run_migrations(&mut self) -> Result<(), anyhow::Error> {
+    fn run_migrations(&mut self) -> Result<(), IndexError> {
         let version: i32 = self
             .conn
             .query_row("PRAGMA user_version", [], |row| row.get(0))
-            .map_err(|e| anyhow::anyhow!("reading user_version: {e}"))?;
+            .map_err(IndexError::ReadUserVersion)?;
 
         if version < 1 {
             self.create_schema_v1()?;
@@ -590,7 +596,7 @@ impl Index {
     /// already built the contentful table, so this migration's DROP + recreate is
     /// a fast no-op in terms of data: it leaves the schema at version 2 without
     /// touching `repos`, `loops`, or `sessions`.
-    fn migrate_v1_to_v2(&mut self) -> Result<(), anyhow::Error> {
+    fn migrate_v1_to_v2(&mut self) -> Result<(), IndexError> {
         self.conn
             .execute_batch(
                 "
@@ -604,13 +610,13 @@ impl Index {
                 COMMIT;
                 ",
             )
-            .map_err(|e| anyhow::anyhow!("migrating v1→v2 (FTS heal): {e}"))
+            .map_err(IndexError::MigrateV1ToV2)
     }
 
     /// Creates all four tables and sets `user_version = 1`.
     ///
     /// Executed in a single `execute_batch` so it is atomic.
-    fn create_schema_v1(&mut self) -> Result<(), anyhow::Error> {
+    fn create_schema_v1(&mut self) -> Result<(), IndexError> {
         self.conn
             .execute_batch(
                 "
@@ -661,18 +667,18 @@ impl Index {
                 COMMIT;
                 ",
             )
-            .map_err(|e| anyhow::anyhow!("creating schema v1: {e}"))
+            .map_err(IndexError::CreateSchemaV1)
     }
 
     /// Runs `PRAGMA integrity_check` and returns an error if it reports problems.
-    fn check_integrity(&self) -> Result<(), anyhow::Error> {
+    fn check_integrity(&self) -> Result<(), IndexError> {
         let result: String = self
             .conn
             .query_row("PRAGMA integrity_check", [], |row| row.get(0))
-            .map_err(|e| anyhow::anyhow!("integrity_check query failed: {e}"))?;
+            .map_err(IndexError::IntegrityCheckQuery)?;
 
         if result != "ok" {
-            return Err(anyhow::anyhow!("integrity_check: {result}"));
+            return Err(IndexError::IntegrityCheckFailed(result));
         }
         Ok(())
     }

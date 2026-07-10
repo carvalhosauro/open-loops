@@ -1,11 +1,13 @@
 //! AI session sources. Each harness (Claude Code, and future ones like Codex,
 //! OpenCode) becomes an adapter of this trait — the rest of the code does not
 //! know the session format or location.
-use anyhow::Result;
+use crate::error::SessionError;
 use chrono::{DateTime, Utc};
 use std::path::Path;
 
 pub mod claude_code;
+
+type Result<T> = std::result::Result<T, SessionError>;
 
 #[derive(Debug, Clone)]
 pub struct SessionExcerpt {

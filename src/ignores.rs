@@ -1,9 +1,11 @@
 //! Loops discarded by the user ("not worth continuing").
 //! Persisted at <base>/ignores.toml, keys in "repo/branch" format.
-use anyhow::{Context, Result};
+use crate::error::IgnoreError;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
+
+type Result<T> = std::result::Result<T, IgnoreError>;
 
 #[derive(Debug, Default, Serialize, Deserialize)]
 struct IgnoreFile {
@@ -30,11 +32,19 @@ impl Ignores {
         let set = match std::fs::read_to_string(&path) {
             Ok(raw) => {
                 toml::from_str::<IgnoreFile>(&raw)
-                    .with_context(|| format!("invalid ignores.toml at {}", path.display()))?
+                    .map_err(|source| IgnoreError::InvalidToml {
+                        path: path.clone(),
+                        source,
+                    })?
                     .ignored
             }
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => BTreeSet::new(),
-            Err(e) => return Err(e).context(format!("reading {}", path.display())),
+            Err(source) => {
+                return Err(IgnoreError::ReadFailed {
+                    path: path.clone(),
+                    source,
+                })
+            }
         };
         Ok(Self { path, set })
     }
@@ -47,8 +57,8 @@ impl Ignores {
     /// has no parent directory, or if writing the file fails.
     pub fn add(&mut self, key: &str) -> Result<()> {
         self.set.insert(key.to_string());
-        let parent = self.path.parent().ok_or_else(|| {
-            anyhow::anyhow!("path has no parent directory: {}", self.path.display())
+        let parent = self.path.parent().ok_or_else(|| IgnoreError::NoParentDir {
+            path: self.path.clone(),
         })?;
         std::fs::create_dir_all(parent)?;
         let file = IgnoreFile {

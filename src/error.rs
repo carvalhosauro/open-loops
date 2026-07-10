@@ -1,12 +1,13 @@
 //! Typed error types for the library's public API (anyhow -> thiserror
 //! migration, see docs/architecture ADRs). Domains are added incrementally;
-//! `query.rs` is the first (spec 4.1a), `scanner.rs` the second (4.1b).
+//! `query.rs` is the first (spec 4.1a), `scanner.rs` the second (4.1b), and
+//! config/cache/distill/sessions/ignores/index the third (4.1c).
 use std::path::PathBuf;
 
 use thiserror::Error;
 
 /// Errors from parsing and resolving queries (`src/query.rs`).
-#[derive(Debug, Error, PartialEq, Eq)]
+#[derive(Debug, Error)]
 pub enum QueryError {
     #[error("idle needs a comparator, e.g. idle:>7d")]
     IdleMissingComparator,
@@ -39,11 +40,176 @@ pub enum QueryError {
     #[error("{0}")]
     ReservedToken(String),
 
-    /// Wraps `Config::context_filter`'s "unknown context" message verbatim.
-    /// `src/config.rs` still returns `anyhow::Result` (migrated in a later
-    /// WAVE 4 task); this keeps the error text unchanged until then.
-    #[error("{0}")]
-    UnknownContext(String),
+    /// Wraps `Config::context_filter`'s typed error (`src/config.rs`, spec 4.1c).
+    #[error(transparent)]
+    Config(#[from] ConfigError),
+}
+
+/// Errors from loading/saving config and resolving roots/labels (`src/config.rs`).
+#[derive(Debug, Error)]
+pub enum ConfigError {
+    #[error("unknown context '@{name}'; define [contexts.{name}] in config.toml")]
+    UnknownContext { name: String },
+
+    #[error(
+        "roots {} and {} share label '{label}'; set an alias in config.toml",
+        root_a.display(),
+        root_b.display()
+    )]
+    LabelCollision {
+        root_a: PathBuf,
+        root_b: PathBuf,
+        label: String,
+    },
+
+    #[error("nonexistent root: {}", path.display())]
+    NonexistentRoot {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+
+    #[error("reading {}", path.display())]
+    ReadFailed {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+
+    #[error("creating {}", path.display())]
+    CreateDirFailed {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+
+    #[error("invalid config.toml at {}", path.display())]
+    InvalidToml {
+        path: PathBuf,
+        #[source]
+        source: toml::de::Error,
+    },
+
+    #[error(transparent)]
+    Io(#[from] std::io::Error),
+
+    #[error(transparent)]
+    TomlSer(#[from] toml::ser::Error),
+}
+
+/// Errors from the distillation cache (`src/cache.rs`).
+#[derive(Debug, Error)]
+pub enum CacheError {
+    #[error("cache path has no parent directory")]
+    NoParentDir,
+
+    #[error(transparent)]
+    Io(#[from] std::io::Error),
+}
+
+/// Errors from building prompts and calling the LLM command (`src/distill.rs`).
+#[derive(Debug, Error)]
+pub enum DistillError {
+    #[error(
+        "failed to run the LLM command `{command}` — is it installed? Adjust llm_command in config.toml"
+    )]
+    SpawnFailed {
+        command: String,
+        #[source]
+        source: std::io::Error,
+    },
+
+    #[error("stdin not available for the LLM process")]
+    NoStdin,
+
+    #[error("failed to write the prompt to the LLM stdin")]
+    WriteFailed {
+        #[source]
+        source: std::io::Error,
+    },
+
+    #[error("failed to wait for the LLM process")]
+    WaitFailed {
+        #[source]
+        source: std::io::Error,
+    },
+
+    #[error("LLM command failed (`{command}`): {stderr}")]
+    CommandFailed { command: String, stderr: String },
+}
+
+/// Errors from AI session sources (`src/sessions/`).
+#[derive(Debug, Error)]
+pub enum SessionError {
+    #[error(transparent)]
+    Io(#[from] std::io::Error),
+}
+
+/// Errors from the ignore list (`src/ignores.rs`).
+#[derive(Debug, Error)]
+pub enum IgnoreError {
+    #[error("invalid ignores.toml at {}", path.display())]
+    InvalidToml {
+        path: PathBuf,
+        #[source]
+        source: toml::de::Error,
+    },
+
+    #[error("reading {}", path.display())]
+    ReadFailed {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+
+    #[error("path has no parent directory: {}", path.display())]
+    NoParentDir { path: PathBuf },
+
+    #[error(transparent)]
+    Io(#[from] std::io::Error),
+
+    #[error(transparent)]
+    TomlSer(#[from] toml::ser::Error),
+}
+
+/// Errors from the SQLite-backed disposable index (`src/index/mod.rs`).
+///
+/// Every public method on `Index` treats these as non-fatal internally (it
+/// warns and falls back); the type exists so the fallible internals stay
+/// typed instead of `anyhow`.
+#[derive(Debug, Error)]
+pub enum IndexError {
+    #[error("creating index dir {}: {source}", path.display())]
+    CreateDirFailed {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+
+    #[error("opening {}: {source}", path.display())]
+    OpenFailed {
+        path: PathBuf,
+        #[source]
+        source: rusqlite::Error,
+    },
+
+    #[error("applying pragmas: {0}")]
+    Pragma(#[source] rusqlite::Error),
+
+    #[error("reading user_version: {0}")]
+    ReadUserVersion(#[source] rusqlite::Error),
+
+    #[error("migrating v1→v2 (FTS heal): {0}")]
+    MigrateV1ToV2(#[source] rusqlite::Error),
+
+    #[error("creating schema v1: {0}")]
+    CreateSchemaV1(#[source] rusqlite::Error),
+
+    #[error("integrity_check query failed: {0}")]
+    IntegrityCheckQuery(#[source] rusqlite::Error),
+
+    #[error("integrity_check: {0}")]
+    IntegrityCheckFailed(String),
 }
 
 /// Errors from git shell-out in `src/scanner.rs`.
@@ -88,6 +254,17 @@ pub enum OpenLoopsError {
     Query(#[from] QueryError),
     #[error(transparent)]
     Git(#[from] GitError),
-    // Later WAVE 4 tasks add: Config, Cache, Distill, Session, Ignore,
-    // Index, Io.
+    #[error(transparent)]
+    Config(#[from] ConfigError),
+    #[error(transparent)]
+    Cache(#[from] CacheError),
+    #[error(transparent)]
+    Distill(#[from] DistillError),
+    #[error(transparent)]
+    Session(#[from] SessionError),
+    #[error(transparent)]
+    Ignore(#[from] IgnoreError),
+    #[error(transparent)]
+    Index(#[from] IndexError),
+    // cli.rs (Task 4) stays on anyhow.
 }

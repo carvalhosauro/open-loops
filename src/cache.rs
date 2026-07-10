@@ -1,8 +1,10 @@
 //! Distillation cache at <base>/cache/<repo>/<branch>@<head-sha>.md.
 //! Keying by the HEAD SHA makes the cache self-invalidate when the branch advances.
+use crate::error::CacheError;
 use crate::scanner::OpenLoop;
-use anyhow::Result;
 use std::path::{Path, PathBuf};
+
+type Result<T> = std::result::Result<T, CacheError>;
 
 /// Distillation cache persisted to disk.
 pub struct Cache {
@@ -38,10 +40,7 @@ impl Cache {
     /// Returns `Err` if the directories cannot be created or the file cannot be written.
     pub fn put(&self, lp: &OpenLoop, content: &str) -> Result<()> {
         let path = self.path(lp);
-        std::fs::create_dir_all(
-            path.parent()
-                .ok_or_else(|| anyhow::anyhow!("cache path has no parent directory"))?,
-        )?;
+        std::fs::create_dir_all(path.parent().ok_or(CacheError::NoParentDir)?)?;
         std::fs::write(path, content)?;
         Ok(())
     }
