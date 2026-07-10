@@ -1,6 +1,8 @@
 //! Typed error types for the library's public API (anyhow -> thiserror
 //! migration, see docs/architecture ADRs). Domains are added incrementally;
-//! `query.rs` is the first (spec 4.1a).
+//! `query.rs` is the first (spec 4.1a), `scanner.rs` the second (4.1b).
+use std::path::PathBuf;
+
 use thiserror::Error;
 
 /// Errors from parsing and resolving queries (`src/query.rs`).
@@ -44,12 +46,48 @@ pub enum QueryError {
     UnknownContext(String),
 }
 
+/// Errors from git shell-out in `src/scanner.rs`.
+#[derive(Debug, Error)]
+pub enum GitError {
+    #[error("git {command} failed in {}: {stderr}", repo.display())]
+    CommandFailed {
+        repo: PathBuf,
+        command: String,
+        stderr: String,
+    },
+
+    #[error("git not found in PATH — install git")]
+    NotInPath(#[source] std::io::Error),
+
+    #[error(
+        "couldn't find the default branch in {} (expected origin/HEAD, main or master)",
+        repo.display()
+    )]
+    NoDefaultBranch { repo: PathBuf },
+
+    #[error("invalid date from git: {date}")]
+    InvalidCommitDate { date: String },
+
+    #[error("no commit dates for {branch}")]
+    NoCommitDates { branch: String },
+
+    #[error(transparent)]
+    InvalidTimestamp(#[from] chrono::ParseError),
+
+    /// Worker panic mapped by [`crate::parallel::try_map`]; becomes a scan
+    /// warning, never aborts the driver.
+    #[error("{0}")]
+    WorkerPanic(&'static str),
+}
+
 /// Top-level error for the library's public API. Domains are added one per
-/// migration task; only `Query` exists so far.
+/// migration task.
 #[derive(Debug, Error)]
 pub enum OpenLoopsError {
     #[error(transparent)]
     Query(#[from] QueryError),
-    // Later WAVE 4 tasks add: Git, Config, Cache, Distill, Session, Ignore,
+    #[error(transparent)]
+    Git(#[from] GitError),
+    // Later WAVE 4 tasks add: Config, Cache, Distill, Session, Ignore,
     // Index, Io.
 }
