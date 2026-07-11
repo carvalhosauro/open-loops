@@ -1,6 +1,12 @@
 # Changelog
 ## unreleased
 
+## 1.6.1 - 2026-07-11
+
+### Internals
+- Bump rusqlite from 0.32.1 to 0.39.0 ([#44](https://github.com/carvalhosauro/open-loops/pull/44))
+- Bump clap_mangen from 0.2.33 to 0.3.0 ([#39](https://github.com/carvalhosauro/open-loops/pull/39))
+
 ## 1.6.0 - 2026-07-05
 
 ### Docs
