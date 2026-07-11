@@ -32,7 +32,7 @@ impl State {
             let file: StateFile =
                 toml::from_str(&raw).map_err(|source| StateError::InvalidStateToml {
                     path: path.clone(),
-                    source,
+                    source: Box::new(source),
                 })?;
             return Ok(Self {
                 path,
@@ -91,7 +91,7 @@ fn legacy_context_from_config(base: &Path) -> Result<Option<String>> {
     let table: toml::Value =
         toml::from_str(&raw).map_err(|source| StateError::InvalidConfigToml {
             path: config_path.clone(),
-            source,
+            source: Box::new(source),
         })?;
     Ok(table
         .get("current_context")

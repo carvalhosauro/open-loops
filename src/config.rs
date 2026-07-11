@@ -264,7 +264,10 @@ impl Store {
             path: path.clone(),
             source,
         })?;
-        toml::from_str(&raw).map_err(|source| ConfigError::InvalidToml { path, source })
+        toml::from_str(&raw).map_err(|source| ConfigError::InvalidToml {
+            path,
+            source: Box::new(source),
+        })
     }
 
     pub fn save(&self, config: &Config) -> Result<()> {

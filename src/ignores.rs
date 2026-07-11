@@ -34,7 +34,7 @@ impl Ignores {
                 toml::from_str::<IgnoreFile>(&raw)
                     .map_err(|source| IgnoreError::InvalidToml {
                         path: path.clone(),
-                        source,
+                        source: Box::new(source),
                     })?
                     .ignored
             }

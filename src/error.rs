@@ -103,8 +103,11 @@ pub enum ConfigError {
     #[error("invalid config.toml at {}", path.display())]
     InvalidToml {
         path: PathBuf,
+        // Boxed (here and in the other *Toml variants): `toml::de::Error`
+        // is large enough to push `OpenLoopsError` past clippy's
+        // `result_large_err` 128-byte cap on Windows targets.
         #[source]
-        source: toml::de::Error,
+        source: Box<toml::de::Error>,
     },
 
     #[error(transparent)]
@@ -168,8 +171,9 @@ pub enum IgnoreError {
     #[error("invalid ignores.toml at {}", path.display())]
     InvalidToml {
         path: PathBuf,
+        // Boxed: see ConfigError::InvalidToml.
         #[source]
-        source: toml::de::Error,
+        source: Box<toml::de::Error>,
     },
 
     #[error("reading {}", path.display())]
@@ -277,15 +281,17 @@ pub enum StateError {
     #[error("invalid state.toml at {}", path.display())]
     InvalidStateToml {
         path: PathBuf,
+        // Boxed: see ConfigError::InvalidToml.
         #[source]
-        source: toml::de::Error,
+        source: Box<toml::de::Error>,
     },
 
     #[error("invalid config.toml at {}", path.display())]
     InvalidConfigToml {
         path: PathBuf,
+        // Boxed: see ConfigError::InvalidToml.
         #[source]
-        source: toml::de::Error,
+        source: Box<toml::de::Error>,
     },
 
     #[error("path has no parent directory: {}", path.display())]
