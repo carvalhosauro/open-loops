@@ -203,17 +203,14 @@ unless `include_ignored`. `idle` is computed as `now - last_commit`;
 `ahead`/`behind` predicates fail closed when the value is `None` (heavy phase not
 run), via `Option::is_some_and`.
 
-**Error handling — note on `QueryError`.** The task brief asks this section to
-document a `QueryError` type. **No such type exists in the code**: `parse`,
-`resolve_plan`, and their helpers all return `anyhow::Result<…>` and signal
-failures with `bail!`/`anyhow::anyhow!` (e.g. `idle needs a comparator, e.g.
-idle:>7d`; `only one @context per query`; `unknown context '@name'; define
-[contexts.name] in config.toml`). The errors are *string-typed*, actionable, and
-surfaced to the user as `error: …` by `main` ([00-overview](00-overview.md#interfaces--contracts)).
-A typed error enum is part of the not-yet-built library-maturity work stream
-([00-overview](00-overview.md#extension--limitations)), not current behaviour; this
-doc documents the code, and the diagram's `QueryError` node names the *condition*,
-not a Rust type.
+**Error handling — `QueryError`.** `parse`, `resolve_plan`, and their helpers
+return `Result<_, QueryError>` ([`src/error.rs:28`](../../src/error.rs:28)).
+Variants cover parse/resolve failures (`IdleMissingComparator`,
+`InvalidDuration`, `InvalidDurationUnit`, `InvalidNumber`, `MultipleContexts`,
+`ContextFilterHasAt`, `ContextFilterHasColon`, `ReservedToken`) and wrap
+`ConfigError` when a context name is unknown (`QueryError::Config`). Messages stay
+actionable and in English; `main` prints the full `source()` chain via
+`error_chain()` ([08-cli-output](08-cli-output.md)).
 
 User-facing query examples and the full attribute table live in
 [docs/features.md](../features.md) and [docs/configuration.md](../configuration.md)
@@ -313,10 +310,9 @@ with a clear error today so the grammar is stable when they land.
 - **No `OR`/parentheses (v1 limit).** The language is AND-only by design. Adding
   boolean composition would touch the parser, `ScanPlan`, and `merge_scan_plans`;
   it is deferred until a concrete need appears.
-- **Typed errors (planned).** Today every failure is an `anyhow` string error.
-  Replacing these with a typed `QueryError` is part of the drafted
-  library-maturity / OSS-health work stream tracked in
-  [00-overview](00-overview.md#extension--limitations), not current behaviour.
+- **Typed errors (implemented).** Query failures are `QueryError` variants;
+  library consumers can `match` on them. Tests assert variants with `matches!`,
+  not substrings of git stderr (which varies by OS/locale).
 - **`worktrees` shares only the filter layer.** `loops worktrees` reuses
   parse → `ScanPlan` → `matches` (roots, `repo`/`branch`, `idle`, ignored) but has
   no ahead/behind axis, so `need_ahead_behind` is ignored in that domain; its

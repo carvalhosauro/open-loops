@@ -1,6 +1,13 @@
 # Changelog
 ## unreleased
 
+### Breaking
+- **Library API:** public functions now return domain-specific `thiserror` enums
+  (`QueryError`, `GitError`, `ConfigError`, …) wrapped by `OpenLoopsError` at the
+  CLI boundary, instead of `anyhow::Result`. Consumers can `match` on variants;
+  `anyhow` is no longer a dependency. See `src/error.rs` and PR
+  [#45](https://github.com/carvalhosauro/open-loops/pull/45).
+
 ## 1.6.1 - 2026-07-11
 
 ### Internals

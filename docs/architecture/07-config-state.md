@@ -293,10 +293,10 @@ so a dismissal is always reversible and auditable.
   there is no stack or per-directory context. Reports (`:name`) and `+stale`,
   designed alongside contexts, are deferred and would extend the query grammar,
   not this store (see [03-query-engine](03-query-engine.md)).
-- **Typed errors (planned).** Every failure here is an `anyhow` string error with
-  an actionable message; the typed-error work is part of the not-yet-built
-  library-maturity / OSS-health stream tracked in
-  [00-overview](00-overview.md#extension--limitations).
+- **Typed errors (implemented).** Config and state failures surface as
+  `ConfigError` and `StateError` ([`src/error.rs`](../../src/error.rs)); the CLI
+  flattens them into `OpenLoopsError`. Messages remain actionable English
+  strings; `main` prints the full cause chain via `error_chain()`.
 
 ## References
 

@@ -69,8 +69,9 @@ This domain owns the dispatch and render vocabulary.
   the query string. This is the most common invocation: the inventory listing.
 - **`run_*` handler** — the per-subcommand orchestration function in `cli.rs`
   (`run_list`, `run_resume`, `run_init`, `run_ignore`, `run_refresh`,
-  `run_worktrees`, `run_completions`). Each returns `anyhow::Result<()>`; `main`
-  turns any `Err` into `error: …` on stderr and exit status 1.
+  `run_worktrees`, `run_completions`). Each returns `Result<(), OpenLoopsError>`;
+  `main` turns any `Err` into `error: …` on stderr (via `error_chain()`) and
+  exit status 1.
 - **shared preamble** — `load_cfg_with_roots` ([`src/cli.rs:38`](../../src/cli.rs:38)),
   the common prologue every scanning command runs first: load config and enforce
   the invariant that at least one root is registered, otherwise emit the guided
@@ -218,10 +219,13 @@ handler `Err`, `main` prints `error: {e:#}` to stderr and exits 1
   resume context / completion script use `print!`/`println!`. `loops` output can
   be piped without progress chatter contaminating it.
 - **Errors are actionable strings, surfaced uniformly.** Every `run_*` returns
-  `anyhow::Result<()>`; `main` is the single sink that formats the error and sets
-  exit status 1 ([`src/main.rs:21`](../../src/main.rs:21)). Messages are in
-  English and tell the user what to do (e.g. "no roots configured. Run: loops init
-  <dir-with-your-repos>", [`src/cli.rs:43`](../../src/cli.rs:43)).
+  `Result<(), OpenLoopsError>`; `main` is the single sink that formats the error
+  with `error_chain()` (full `source()` chain, anyhow `{:#}` parity) and sets exit
+  status 1 ([`src/main.rs:21`](../../src/main.rs:21)). Domain validation errors
+  (`CliError`) and lower-layer failures (`QueryError`, `ConfigError`, …) share
+  the same path. Messages are in English and tell the user what to do (e.g.
+  "no roots configured. Run: loops init <dir-with-your-repos>",
+  [`src/error.rs:345`](../../src/error.rs:345)).
 - **No-roots is a guided error on every scanning command.** `load_cfg_with_roots`
   ([`src/cli.rs:38`](../../src/cli.rs:38)) is the shared preamble that fails closed
   with the `loops init` guidance when no root is registered, so all scanning
@@ -295,11 +299,14 @@ The full user-facing command and flag reference is in
   ([`src/cli.rs:421`](../../src/cli.rs:421)); the worktree domain shares only the
   filter *layer* conceptually, and wiring query filters into `loops worktrees` is
   future work (see [03-query-engine](03-query-engine.md#extension--limitations)).
-- **Library-maturity work stream (planned, not built).** Typed errors (replacing
-  the uniform `anyhow` string sink in `main`) and a stable public library API are
-  part of the drafted, not-yet-implemented work stream tracked in
-  [00-overview](00-overview.md#extension--limitations); today the CLI is the only
-  supported public surface.
+- **Typed errors (implemented).** The library exposes `thiserror` enums per domain
+  plus `OpenLoopsError` ([`src/error.rs`](../../src/error.rs)); `anyhow` is no
+  longer a dependency. The CLI remains the primary supported surface; library
+  consumers can `match` on error variants.
+- **Observability (planned).** Structured logging via `tracing`, a global
+  `--verbose` flag, and migration of progress `eprintln!` calls are part of the
+  remaining library-maturity work stream tracked in
+  [00-overview](00-overview.md#extension--limitations).
 
 ## References
 
