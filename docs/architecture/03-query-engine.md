@@ -100,8 +100,9 @@ A query travels four stages: the CLI wrapper resolves the active context and
 persists any switch; `resolve_plan` expands `@context` tokens and AND-merges them
 with the ad-hoc tokens into one `ScanPlan`; discovery scans (honouring the
 pushed-down `repo:` hint); and `ScanPlan::matches` filters the discovered loops in
-memory. Reserved-but-unimplemented tokens (`:report`, `+stale`) are rejected with a
-clear "not supported yet" error during parsing, so the grammar stays stable.
+memory. `+stale` expands to `idle:>{stale_threshold}` during resolution; the
+still-reserved `:report` token is rejected with a clear "not supported yet" error
+during parsing, so the grammar stays stable.
 
 ```mermaid
 flowchart TD
@@ -116,16 +117,19 @@ flowchart TD
 
     subparse["parse each part (parse):<br/>tokens to predicates"] --> toks{token kind}
     toks -->|+ignored / -ignored| flag["set include_ignored"]
+    toks -->|+stale| stale["set stale flag<br/>(expanded in resolve_plan)"]
     toks -->|repo: branch: key: root:| subs["push substring filter"]
     toks -->|idle: ahead: behind:| attr["split comparator,<br/>push AttrFilter"]
     toks -->|bare term| term["push term"]
-    toks -->|:report / +stale| rep["QueryError: not supported yet"]
+    toks -->|:report| rep["QueryError: not supported yet"]
 
     flag --> merge
+    stale --> merge
     subs --> merge
     attr --> merge
     term --> merge
-    merge["merge_scan_plans:<br/>AND filters, OR flags"] --> plan[["ScanPlan"]]
+    merge["merge_scan_plans:<br/>AND filters, OR flags"] --> stalex["expand_stale:<br/>+stale to idle:&gt;stale_threshold"]
+    stalex --> plan[["ScanPlan"]]
 
     plan --> rootpd["root_filters to roots subset<br/>(config.resolve_scan_roots)"]
     rootpd --> scan["discovery scan<br/>(repo: pushed down as walk hint)"]

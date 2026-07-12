@@ -586,6 +586,27 @@ mod tests {
     }
 
     #[test]
+    fn resolve_plan_expands_stale_embedded_in_context() {
+        // A `+stale` inside a context filter must survive the sub-plan → merge →
+        // single expansion path (the flag is OR-merged, then expanded once).
+        let cfg = Config {
+            contexts: BTreeMap::from([(
+                "stale-work".into(),
+                ContextDef {
+                    filter: "root:~/work +stale".into(),
+                },
+            )]),
+            ..Config::default()
+        };
+        let opts = ResolveOptions {
+            current_context: None,
+        };
+        let got = resolve_plan("@stale-work", &cfg, &opts).unwrap();
+        assert_eq!(got, parse("root:~/work idle:>14d").unwrap());
+        assert!(!got.stale, "flag cleared after expansion");
+    }
+
+    #[test]
     fn merge_scan_plans_combines_root_filters() {
         let a = parse("root:~/work").unwrap();
         let b = parse("root:~/personal").unwrap();
