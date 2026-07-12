@@ -1,6 +1,11 @@
 # Changelog
 ## unreleased
 
+## 1.6.2 - 2026-07-12
+
+### Internals
+- Migrate library API from anyhow to typed domain errors (WAVE 4.1) ([#45](https://github.com/carvalhosauro/open-loops/pull/45))
+
 ### Breaking
 - **Library API:** public functions now return domain-specific `thiserror` enums
   (`QueryError`, `GitError`, `ConfigError`, …) wrapped by `OpenLoopsError` at the
