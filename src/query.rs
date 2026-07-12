@@ -705,4 +705,78 @@ mod tests {
         c.behind = None;
         assert!(!parse("behind:0").unwrap().matches(&c, now));
     }
+
+    // Property-based tests (spec WAVE 4.2). They complement — do not replace —
+    // the manual cases above. Inputs are bounded so the CI matrix stays fast and
+    // strings stay OS-agnostic (no PathBuf::display).
+    mod props {
+        use super::*;
+        use proptest::prelude::*;
+
+        proptest! {
+            /// `parse` never panics for an arbitrary string: a bad query is an
+            /// `Err`, never a crash.
+            #[test]
+            fn parse_never_panics(s in ".*") {
+                let _ = parse(&s);
+            }
+
+            /// A `name:value` token whose name is not a known attribute is a bare
+            /// term, not an error (the `foo:bar` rule). `name` is a lowercase word
+            /// so it never collides with `+ignored`/`-ignored`/`+stale`/`:report`;
+            /// `value` excludes `:` and whitespace so the token stays intact.
+            #[test]
+            fn unknown_attr_is_a_bare_term(
+                name in "[a-z]{1,8}",
+                value in "[a-z0-9/_.-]{1,8}",
+            ) {
+                prop_assume!(Attr::parse(&name).is_none());
+                let tok = format!("{name}:{value}");
+                let plan = parse(&tok).unwrap();
+                prop_assert_eq!(plan.terms, vec![tok]);
+            }
+
+            /// `parse_duration` accepts exactly the `m|h|d|w` suffixes.
+            #[test]
+            fn duration_valid_units_ok(n in 0i64..1_000_000, unit in "[mhdw]") {
+                let input = format!("{n}{unit}");
+                prop_assert!(parse_duration(&input).is_ok());
+            }
+
+            /// Any single-letter suffix outside `m|h|d|w` is rejected as an
+            /// invalid unit rather than silently accepted.
+            #[test]
+            fn duration_unknown_unit_errs(n in 0i64..1_000_000, unit in "[a-z]") {
+                prop_assume!(!matches!(unit.as_str(), "m" | "h" | "d" | "w"));
+                let err = parse_duration(&format!("{n}{unit}")).unwrap_err();
+                prop_assert!(matches!(err, QueryError::InvalidDurationUnit(_)));
+            }
+
+            /// `idle:>N` is monotonic in the threshold: if a candidate clears the
+            /// higher bound it also clears every lower one.
+            #[test]
+            fn idle_gt_is_monotonic(
+                days_idle in 0i64..1000,
+                lo in 0i64..1000,
+                hi in 0i64..1000,
+            ) {
+                prop_assume!(lo < hi);
+                let now = Utc::now();
+                let c = Candidate {
+                    repo_name: "r",
+                    branch: "b",
+                    key: "k",
+                    last_commit: now - Duration::days(days_idle),
+                    ahead: Some(0),
+                    behind: Some(0),
+                    ignored: false,
+                };
+                let hi_plan = parse(&format!("idle:>{hi}d")).unwrap();
+                let lo_plan = parse(&format!("idle:>{lo}d")).unwrap();
+                if hi_plan.matches(&c, now) {
+                    prop_assert!(lo_plan.matches(&c, now));
+                }
+            }
+        }
+    }
 }

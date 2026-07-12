@@ -1,6 +1,13 @@
 # Changelog
 ## unreleased
 
+### Internals
+- Add property-based tests for the query engine via `proptest` (WAVE 4.2):
+  `parse` never panics, unknown `name:value` tokens stay bare terms,
+  `parse_duration` accepts only `m|h|d|w`, and `idle:>N` is monotonic. Fills
+  parser gaps in `scanner` (malformed and Windows-style worktree lines) and
+  `distill` (multi-session prompt separators).
+
 ## 1.6.2 - 2026-07-12
 
 ### Internals

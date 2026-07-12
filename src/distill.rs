@@ -304,6 +304,29 @@ mod tests {
     }
 
     #[test]
+    fn build_prompt_separates_multiple_sessions() {
+        let first = SessionExcerpt {
+            source: "sessao1.jsonl".into(),
+            text: "[user] first task".into(),
+            ..fake_excerpt()
+        };
+        let second = SessionExcerpt {
+            source: "sessao2.jsonl".into(),
+            text: "[user] second task".into(),
+            ..fake_excerpt()
+        };
+        let p = build_prompt(&fake_loop(), "main", "", "", &[first, second]);
+        // both excerpts land under their own `# Session <source>` header, in order
+        let h1 = p.find("# Session sessao1.jsonl").expect("first header");
+        let h2 = p.find("# Session sessao2.jsonl").expect("second header");
+        assert!(h1 < h2, "sessions kept in order");
+        assert!(p.contains("[user] first task"));
+        assert!(p.contains("[user] second task"));
+        // no "none found" sentinel when excerpts exist
+        assert!(!p.contains("none found"));
+    }
+
+    #[test]
     fn run_llm_passes_prompt_via_stdin() {
         // `cat` echoes stdin: validates the contract without a real LLM
         let out = run_llm("cat", "test prompt").unwrap();
