@@ -39,9 +39,7 @@ fn init_tracing(verbose: bool) {
     let filter = match std::env::var("RUST_LOG") {
         // try_new so an unparseable RUST_LOG degrades to `warn` instead of an
         // empty (level-OFF) filter that would hide warnings too.
-        Ok(v) if !v.is_empty() => {
-            EnvFilter::try_new(&v).unwrap_or_else(|_| EnvFilter::new("warn"))
-        }
+        Ok(v) if !v.is_empty() => EnvFilter::try_new(&v).unwrap_or_else(|_| EnvFilter::new("warn")),
         _ if verbose => EnvFilter::new("open_loops=debug"),
         _ => EnvFilter::new("warn"),
     };
