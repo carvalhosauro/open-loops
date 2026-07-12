@@ -736,11 +736,20 @@ mod tests {
                 prop_assert_eq!(plan.terms, vec![tok]);
             }
 
-            /// `parse_duration` accepts exactly the `m|h|d|w` suffixes.
+            /// `parse_duration` accepts exactly the `m|h|d|w` suffixes and maps
+            /// each to the matching `Duration` (asserting the value, not just
+            /// `is_ok`, so a unit swap — e.g. `d`↔`w` — would fail).
             #[test]
-            fn duration_valid_units_ok(n in 0i64..1_000_000, unit in "[mhdw]") {
+            fn duration_valid_units_match_expected(n in 0i64..1_000_000, unit in "[mhdw]") {
                 let input = format!("{n}{unit}");
-                prop_assert!(parse_duration(&input).is_ok());
+                let expected = match unit.as_str() {
+                    "m" => Duration::minutes(n),
+                    "h" => Duration::hours(n),
+                    "d" => Duration::days(n),
+                    "w" => Duration::weeks(n),
+                    _ => unreachable!("generator is restricted to [mhdw]"),
+                };
+                prop_assert_eq!(parse_duration(&input).unwrap(), expected);
             }
 
             /// Any single-letter suffix outside `m|h|d|w` is rejected as an
