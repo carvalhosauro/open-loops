@@ -1568,6 +1568,37 @@ bare
     }
 
     #[test]
+    fn parse_worktree_porcelain_ignores_garbage_between_fields() {
+        // an unrecognized line inside an entry block is skipped; the entry and
+        // its trailing `branch` field still parse.
+        let out = "\
+worktree /home/u/app/main
+HEAD aaaaaaaa
+garbage line the parser does not know
+branch refs/heads/main
+";
+        let entries = parse_worktree_porcelain(out);
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].branch.as_deref(), Some("main"));
+        assert!(!entries[0].bare);
+        assert!(!entries[0].prunable);
+    }
+
+    #[test]
+    fn parse_worktree_porcelain_preserves_windows_style_path() {
+        // Windows porcelain emits backslash paths; the parser stores the path
+        // verbatim (string input, so this test runs identically on every OS).
+        let out = "worktree C:\\Users\\u\\app\\main\nbranch refs/heads/main\n";
+        let entries = parse_worktree_porcelain(out);
+        assert_eq!(entries.len(), 1);
+        assert_eq!(
+            entries[0].path,
+            std::path::PathBuf::from("C:\\Users\\u\\app\\main")
+        );
+        assert_eq!(entries[0].branch.as_deref(), Some("main"));
+    }
+
+    #[test]
     fn parse_worktree_porcelain_ignores_lines_before_first_worktree() {
         let out = "branch refs/heads/orphan\nHEAD deadbeef\nworktree /home/u/app/main\nbranch refs/heads/main\n";
         let entries = parse_worktree_porcelain(out);

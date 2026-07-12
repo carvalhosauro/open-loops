@@ -35,6 +35,7 @@ toml = "1.1"
 assert_cmd = "2"
 filetime = "0.2"
 predicates = "3"
+proptest = "1"
 tempfile = "3"
 
 [build-dependencies]

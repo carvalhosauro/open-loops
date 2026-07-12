@@ -363,6 +363,11 @@ Tests worth reading (all in [`src/query.rs`](../../src/query.rs:392)):
 `resolve_plan_applies_current_context`, `resolve_plan_explicit_context_replaces_current`,
 `resolve_plan_none_clears_current`, `resolve_plan_rejects_nested_context_in_filter`,
 `resolve_plan_rejects_two_context_tokens`, and the `matches_*` evaluator tests.
+The `tests::props` submodule adds `proptest` coverage (spec §4.2): `parse` never
+panics on arbitrary input, unknown `name:value` tokens stay bare terms,
+`parse_duration` accepts only the `m|h|d|w` suffixes, and `idle:>N` is monotonic
+in its threshold. Inputs are bounded and string-only so the property tests run
+identically across the CI matrix.
 
 Sibling architecture docs: [00-overview](00-overview.md) ·
 [01-discovery](01-discovery.md) (produces the open loops this engine filters; honours
