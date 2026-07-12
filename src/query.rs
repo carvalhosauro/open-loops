@@ -237,7 +237,28 @@ fn validate_context_filter(name: &str, filter: &str) -> Result<(), QueryError> {
     Ok(())
 }
 
-/// Resolves `@context` tokens and default context into a single [`ScanPlan`].
+/// Rejects nesting inside a report filter (MVP): a report cannot embed a
+/// `@context` or another `:report`. Same shape as [`validate_context_filter`].
+fn validate_report_filter(name: &str, filter: &str) -> Result<(), QueryError> {
+    for tok in filter.split_whitespace() {
+        if tok.contains('@') {
+            return Err(QueryError::ReportFilterHasAt {
+                name: name.to_string(),
+                token: tok.to_string(),
+            });
+        }
+        if tok.starts_with(':') {
+            return Err(QueryError::ReportFilterHasColon {
+                name: name.to_string(),
+                token: tok.to_string(),
+            });
+        }
+    }
+    Ok(())
+}
+
+/// Resolves `@context` and `:report` tokens plus the default context into a
+/// single [`ScanPlan`].
 pub fn resolve_plan(
     input: &str,
     cfg: &Config,
@@ -263,6 +284,12 @@ pub fn resolve_plan(
             }
             let filter = cfg.context_filter(name)?;
             validate_context_filter(name, filter)?;
+            plans.push(parse(filter)?);
+        } else if let Some(name) = tok.strip_prefix(':') {
+            // `:report` expands to its saved filter and AND-composes with the rest
+            // of the query, mirroring `@context`. MVP filters cannot nest.
+            let filter = cfg.report_filter(name)?;
+            validate_report_filter(name, filter)?;
             plans.push(parse(filter)?);
         } else {
             user_tokens.push(tok);
@@ -741,13 +768,90 @@ mod tests {
         );
     }
 
+    fn cfg_with_report(name: &str, filter: &str) -> Config {
+        use crate::config::ReportDef;
+        Config {
+            reports: BTreeMap::from([(
+                name.into(),
+                ReportDef {
+                    filter: filter.into(),
+                },
+            )]),
+            ..Config::default()
+        }
+    }
+
     #[test]
-    fn resolve_plan_report_still_errors() {
-        let cfg = test_cfg();
+    fn resolve_plan_unknown_report_errors() {
+        let cfg = test_cfg(); // no reports defined
         let opts = ResolveOptions {
             current_context: None,
         };
         let err = resolve_plan(":hot", &cfg, &opts).unwrap_err();
+        assert!(
+            matches!(
+                err,
+                QueryError::Config(crate::error::ConfigError::UnknownReport { ref name })
+                    if name == "hot"
+            ),
+            "got: {err:?}"
+        );
+    }
+
+    #[test]
+    fn resolve_plan_expands_report() {
+        let cfg = cfg_with_report("hot", "repo:api idle:>7d");
+        let opts = ResolveOptions {
+            current_context: None,
+        };
+        let got = resolve_plan(":hot", &cfg, &opts).unwrap();
+        assert_eq!(got, parse("repo:api idle:>7d").unwrap());
+    }
+
+    #[test]
+    fn resolve_plan_report_composes_with_terms() {
+        let cfg = cfg_with_report("hot", "idle:>7d");
+        let opts = ResolveOptions {
+            current_context: None,
+        };
+        // `:hot api` = saved filter AND the ad-hoc term, mirroring @context.
+        let got = resolve_plan(":hot api", &cfg, &opts).unwrap();
+        assert_eq!(got, parse("idle:>7d api").unwrap());
+    }
+
+    #[test]
+    fn resolve_plan_report_rejects_nested_context() {
+        let cfg = cfg_with_report("bad", "@work idle:>7d");
+        let opts = ResolveOptions {
+            current_context: None,
+        };
+        let err = resolve_plan(":bad", &cfg, &opts).unwrap_err();
+        assert!(
+            matches!(err, QueryError::ReportFilterHasAt { ref name, ref token }
+                if name == "bad" && token == "@work"),
+            "got: {err:?}"
+        );
+    }
+
+    #[test]
+    fn resolve_plan_report_rejects_nested_report() {
+        let cfg = cfg_with_report("bad", ":other");
+        let opts = ResolveOptions {
+            current_context: None,
+        };
+        let err = resolve_plan(":bad", &cfg, &opts).unwrap_err();
+        assert!(
+            matches!(err, QueryError::ReportFilterHasColon { ref name, ref token }
+                if name == "bad" && token == ":other"),
+            "got: {err:?}"
+        );
+    }
+
+    #[test]
+    fn parse_report_token_still_reserved_directly() {
+        // `parse` alone (not via resolve_plan) still rejects a `:` token, so the
+        // grammar guard stays; resolve_plan is what makes `:name` functional.
+        let err = parse(":hot").unwrap_err();
         assert!(
             matches!(err, QueryError::ReservedReport { ref token } if token == ":hot"),
             "got: {err:?}"

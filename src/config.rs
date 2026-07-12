@@ -13,6 +13,13 @@ pub struct ContextDef {
     pub filter: String,
 }
 
+/// A saved query invoked ad-hoc with `:name`. Same shape as a context but not
+/// persisted to `state.toml`; MVP filters cannot embed `@context` or `:report`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ReportDef {
+    pub filter: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Config {
     /// Directories where git repositories are searched.
@@ -43,6 +50,9 @@ pub struct Config {
     /// Named query scopes (`@name` in queries) mapped to filter strings.
     #[serde(default)]
     pub contexts: BTreeMap<String, ContextDef>,
+    /// Saved queries invoked ad-hoc with `:name`, mapped to filter strings.
+    #[serde(default)]
+    pub reports: BTreeMap<String, ReportDef>,
     /// Idle threshold the `+stale` query shortcut expands to (query duration
     /// syntax, e.g. `14d`): `+stale` is sugar for `idle:>{stale_threshold}`.
     #[serde(default = "default_stale_threshold")]
@@ -87,6 +97,7 @@ impl Default for Config {
             scan_depth: default_scan_depth(),
             inventory_ttl_secs: 0,
             contexts: BTreeMap::new(),
+            reports: BTreeMap::new(),
             stale_threshold: default_stale_threshold(),
         }
     }
@@ -99,6 +110,16 @@ impl Config {
             .get(name)
             .map(|c| c.filter.as_str())
             .ok_or_else(|| ConfigError::UnknownContext {
+                name: name.to_string(),
+            })
+    }
+
+    /// Returns the filter string for a named report (`:name`).
+    pub fn report_filter(&self, name: &str) -> Result<&str> {
+        self.reports
+            .get(name)
+            .map(|r| r.filter.as_str())
+            .ok_or_else(|| ConfigError::UnknownReport {
                 name: name.to_string(),
             })
     }
