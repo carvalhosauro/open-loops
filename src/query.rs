@@ -287,7 +287,9 @@ pub fn resolve_plan(
             plans.push(parse(filter)?);
         } else if let Some(name) = tok.strip_prefix(':') {
             // `:report` expands to its saved filter and AND-composes with the rest
-            // of the query, mirroring `@context`. MVP filters cannot nest.
+            // of the query, mirroring `@context`. MVP filters cannot nest. Unlike
+            // `@context` (capped at one because it may persist to state.toml),
+            // multiple `:report`s are allowed — they only AND-merge, never persist.
             let filter = cfg.report_filter(name)?;
             validate_report_filter(name, filter)?;
             plans.push(parse(filter)?);
@@ -817,6 +819,45 @@ mod tests {
         // `:hot api` = saved filter AND the ad-hoc term, mirroring @context.
         let got = resolve_plan(":hot api", &cfg, &opts).unwrap();
         assert_eq!(got, parse("idle:>7d api").unwrap());
+    }
+
+    #[test]
+    fn resolve_plan_report_composes_with_active_context() {
+        // A report and the default (active) context both apply — the report is
+        // not a context, so it does not suppress the active-context expansion.
+        let cfg = Config {
+            contexts: BTreeMap::from([(
+                "work".into(),
+                ContextDef {
+                    filter: "root:~/work".into(),
+                },
+            )]),
+            reports: BTreeMap::from([(
+                "hot".into(),
+                crate::config::ReportDef {
+                    filter: "idle:>7d".into(),
+                },
+            )]),
+            ..Config::default()
+        };
+        let opts = ResolveOptions {
+            current_context: Some("work"),
+        };
+        let got = resolve_plan(":hot", &cfg, &opts).unwrap();
+        assert_eq!(got, parse("root:~/work idle:>7d").unwrap());
+    }
+
+    #[test]
+    fn resolve_plan_report_filter_may_use_stale() {
+        // `+stale` inside a report filter survives merge and is expanded once by
+        // expand_stale on the final plan (default 14d threshold).
+        let cfg = cfg_with_report("stale-work", "root:~/work +stale");
+        let opts = ResolveOptions {
+            current_context: None,
+        };
+        let got = resolve_plan(":stale-work", &cfg, &opts).unwrap();
+        assert_eq!(got, parse("root:~/work idle:>14d").unwrap());
+        assert!(!got.stale);
     }
 
     #[test]
