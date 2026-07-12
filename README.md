@@ -5,14 +5,47 @@
 [![MSRV](https://img.shields.io/badge/MSRV-1.89-blue)](rust-toolchain.toml)
 [![license](https://img.shields.io/crates/l/open-loops.svg)](LICENSE)
 
-> What did I start and not finish? Where did I leave off? What's the next step?
+> **What did I start and not finish? Where did I leave off? What's the next step?**
 
-`loops` lists your paused work (unmerged branches across all your repos) and
-reconstructs resume context from your AI sessions and git — without you
-documenting anything.
+`loops` is a git companion that finds your paused work — every unmerged branch
+across all your repos — and reconstructs *why you started it and what's left* by
+distilling your git history and the AI-coding sessions that touched it. No notes,
+no tickets, no ceremony.
 
-All user-facing output is in English: CLI messages, errors, resume sections,
-and docs.
+**Pull-only and local-first.** It captures nothing ahead of time and never writes
+inside your repos: it reads git and your AI-session logs *on demand*, so it works
+retroactively on branches you already have. The only network call is the LLM
+command *you* configure (default `claude -p`; any stdin→stdout command works).
+Every reconstruction ships a **confidence score** and an auditable `## Sources`
+section — see [SECURITY.md](SECURITY.md).
+
+<!-- Demo GIF: generate with `agg docs/demo.cast docs/demo.gif`
+     (install agg: `cargo install --git https://github.com/asciinema/agg`),
+     commit docs/demo.gif, then uncomment:
+<p align="center"><img src="docs/demo.gif" alt="loops demo" width="720"></p>
+-->
+
+```console
+$ loops
+scanning git repositories…
+LOOP                    IDLE FOR  AHEAD  BEHIND
+my-app/feat/login            12d      3       1
+api/fix/timeout               2d      1       0
+
+$ loops resume feat/login
+# my-app/feat/login
+**Confidence:** high
+
+## Why
+Adding OAuth login to unblock the onboarding flow.
+## Done
+- Token validation middleware
+- Login form wired to /auth/login
+## Remaining
+- Refresh token rotation
+## Next step
+Implement refresh token rotation in auth/refresh.rs and add an expiry test.
+```
 
 ## Install
 
@@ -127,9 +160,11 @@ Full reference in [`docs/`](docs/): [setup](docs/setup.md) ·
 
 ## Contributing
 
-Contributions are welcome — see [`CONTRIBUTING.md`](CONTRIBUTING.md) for the dev
-workflow and conventions, [`SECURITY.md`](SECURITY.md) to report a vulnerability,
-and the [Code of Conduct](CODE_OF_CONDUCT.md).
+Contributions are welcome. New here? [`ONBOARDING.md`](ONBOARDING.md) gets you from
+clone to a first change in minutes. See [`CONTRIBUTING.md`](CONTRIBUTING.md) for the
+full dev workflow and conventions, [`SECURITY.md`](SECURITY.md) to report a
+vulnerability, and the [Code of Conduct](CODE_OF_CONDUCT.md). Good first issues are
+labelled [`good first issue`](https://github.com/carvalhosauro/open-loops/labels/good%20first%20issue).
 
 ## License
 
