@@ -142,6 +142,21 @@ fn list_and_resume_without_roots_guides_user() {
         .stderr(predicate::str::contains("no roots configured"));
 }
 
+/// Regression: `main.rs` must print the full `source()` chain (anyhow `{:#}`
+/// parity). With bare `Display` on thiserror types, the TOML cause vanished.
+#[test]
+fn invalid_config_toml_reports_root_cause() {
+    let tmp = tempfile::tempdir().unwrap();
+    let home = tmp.path().join("home");
+    std::fs::create_dir_all(&home).unwrap();
+    std::fs::write(home.join("config.toml"), "not valid toml [[[").unwrap();
+    loops(&home)
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("invalid config.toml"))
+        .stderr(predicate::str::contains("TOML parse error"));
+}
+
 #[test]
 fn ignore_key_without_slash_rejects_with_helpful_message() {
     let tmp = tempfile::tempdir().unwrap();

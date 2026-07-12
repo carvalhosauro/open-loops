@@ -1,10 +1,12 @@
 //! Config persisted at <base>/config.toml.
 //! The base path comes from outside (main resolves OPEN_LOOPS_HOME or ~/.open-loops)
 //! so tests can inject a tempdir — nothing here reads environment variables.
-use anyhow::{Context, Result};
+use crate::error::ConfigError;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashSet};
 use std::path::{Path, PathBuf};
+
+type Result<T> = std::result::Result<T, ConfigError>;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ContextDef {
@@ -87,10 +89,8 @@ impl Config {
         self.contexts
             .get(name)
             .map(|c| c.filter.as_str())
-            .ok_or_else(|| {
-                anyhow::anyhow!(
-                    "unknown context '@{name}'; define [contexts.{name}] in config.toml"
-                )
+            .ok_or_else(|| ConfigError::UnknownContext {
+                name: name.to_string(),
             })
     }
 
@@ -109,11 +109,11 @@ impl Config {
                         .unwrap_or_else(|| root.to_string_lossy().into_owned())
                 });
             if let Some((other, _)) = out.iter().find(|(_, l)| *l == label) {
-                anyhow::bail!(
-                    "roots {} and {} share label '{label}'; set an alias in config.toml",
-                    other.display(),
-                    root.display()
-                );
+                return Err(ConfigError::LabelCollision {
+                    root_a: other.clone(),
+                    root_b: root.clone(),
+                    label,
+                });
             }
             out.push((root.clone(), label));
         }
@@ -260,23 +260,34 @@ impl Store {
         if !path.exists() {
             return Ok(Config::default());
         }
-        let raw = std::fs::read_to_string(&path)
-            .with_context(|| format!("reading {}", path.display()))?;
-        toml::from_str(&raw).with_context(|| format!("invalid config.toml at {}", path.display()))
+        let raw = std::fs::read_to_string(&path).map_err(|source| ConfigError::ReadFailed {
+            path: path.clone(),
+            source,
+        })?;
+        toml::from_str(&raw).map_err(|source| ConfigError::InvalidToml {
+            path,
+            source: Box::new(source),
+        })
     }
 
     pub fn save(&self, config: &Config) -> Result<()> {
-        std::fs::create_dir_all(&self.base)
-            .with_context(|| format!("creating {}", self.base.display()))?;
-        std::fs::write(self.config_path(), toml::to_string_pretty(config)?)?;
+        std::fs::create_dir_all(&self.base).map_err(|source| ConfigError::CreateDirFailed {
+            path: self.base.clone(),
+            source,
+        })?;
+        let path = self.config_path();
+        std::fs::write(&path, toml::to_string_pretty(config)?)
+            .map_err(|source| ConfigError::WriteFailed { path, source })?;
         Ok(())
     }
 
     pub fn add_roots(&self, paths: &[PathBuf]) -> Result<Config> {
         let mut config = self.load()?;
         for p in paths {
-            let abs = std::fs::canonicalize(p)
-                .with_context(|| format!("nonexistent root: {}", p.display()))?;
+            let abs = std::fs::canonicalize(p).map_err(|source| ConfigError::NonexistentRoot {
+                path: p.clone(),
+                source,
+            })?;
             if !config.roots.contains(&abs) {
                 config.roots.push(abs);
             }
@@ -332,7 +343,10 @@ mod tests {
         let err = store
             .add_roots(&[tmp.path().join("does-not-exist")])
             .unwrap_err();
-        assert!(err.to_string().contains("nonexistent root"));
+        assert!(
+            matches!(err, ConfigError::NonexistentRoot { .. }),
+            "got: {err:?}"
+        );
     }
 
     #[test]
@@ -540,9 +554,16 @@ mod tests {
             roots: vec![a, b],
             ..Config::default()
         };
-        let err = cfg.resolve_labels().unwrap_err().to_string();
-        assert!(err.contains("share label"), "got: {err}");
-        assert!(err.contains("alias"), "got: {err}");
+        let err = cfg.resolve_labels().unwrap_err();
+        assert!(
+            matches!(err, ConfigError::LabelCollision { ref label, .. } if label == "repos"),
+            "got: {err:?}"
+        );
+        // The actionable hint lives only in the #[error] message; guard it so a
+        // future edit can't silently drop the "set an alias" guidance.
+        let msg = err.to_string();
+        assert!(msg.contains("share label"), "got: {msg}");
+        assert!(msg.contains("set an alias in config.toml"), "got: {msg}");
     }
 
     #[test]
@@ -591,8 +612,10 @@ mod tests {
     #[test]
     fn context_filter_errors_for_unknown_context() {
         let cfg = Config::default();
-        let err = cfg.context_filter("missing").unwrap_err().to_string();
-        assert!(err.contains("unknown context '@missing'"), "got: {err}");
-        assert!(err.contains("[contexts.missing]"), "got: {err}");
+        let err = cfg.context_filter("missing").unwrap_err();
+        assert!(
+            matches!(err, ConfigError::UnknownContext { ref name } if name == "missing"),
+            "got: {err:?}"
+        );
     }
 }

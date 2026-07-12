@@ -18,7 +18,19 @@ use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::thread;
 
-use anyhow::Result;
+use crate::error::GitError;
+
+/// Error types used with [`try_map`] must absorb a caught worker panic without
+/// aborting the scan (see tolerance rules in `docs/architecture/01-discovery.md`).
+pub trait PanicRecover: Send + 'static {
+    fn from_worker_panic(msg: &'static str) -> Self;
+}
+
+impl PanicRecover for GitError {
+    fn from_worker_panic(msg: &'static str) -> Self {
+        GitError::WorkerPanic(msg)
+    }
+}
 
 /// Default worker cap: the machine's available parallelism (≈ `nproc`), never
 /// below 1.
@@ -39,23 +51,24 @@ pub fn default_concurrency() -> usize {
 /// ALIGNED with `items`.
 ///
 /// `f` returns `Result<R>`. A panic inside `f` for one item is caught and mapped
-/// to `Err(anyhow!(panic_msg))` for THAT item only — every other item still
-/// produces its result. This preserves the driver contract that a single
+/// to `Err(E::from_worker_panic(panic_msg))` for THAT item only — every other
+/// item still produces its result. This preserves the driver contract that a single
 /// misbehaving repo becomes a warning, never an aborted scan (see the tolerance
 /// rules in `docs/architecture/01-discovery.md`).
 ///
 /// Ordering: workers claim indices out of order, but each result is scattered
 /// back to its original slot, so `out[i]` is always the result of `f(&items[i])`.
-pub fn try_map<T, R, F>(
+pub fn try_map<T, R, E, F>(
     items: &[T],
     concurrency: usize,
     panic_msg: &'static str,
     f: F,
-) -> Vec<Result<R>>
+) -> Vec<std::result::Result<R, E>>
 where
     T: Sync,
     R: Send,
-    F: Fn(&T) -> Result<R> + Sync,
+    E: PanicRecover,
+    F: Fn(&T) -> std::result::Result<R, E> + Sync,
 {
     let n = items.len();
     if n == 0 {
@@ -69,11 +82,11 @@ where
     // thread-local until the join avoids any shared results buffer (no locking),
     // and because `catch_unwind` turns a panicking item into an `Err` value the
     // worker loop itself never unwinds — so no claimed result is ever lost.
-    let per_worker: Vec<Vec<(usize, Result<R>)>> = thread::scope(|s| {
+    let per_worker: Vec<Vec<(usize, std::result::Result<R, E>)>> = thread::scope(|s| {
         let handles: Vec<_> = (0..workers)
             .map(|_| {
                 s.spawn(|| {
-                    let mut claimed: Vec<(usize, Result<R>)> = Vec::new();
+                    let mut claimed: Vec<(usize, std::result::Result<R, E>)> = Vec::new();
                     loop {
                         let i = next.fetch_add(1, Ordering::Relaxed);
                         if i >= n {
@@ -81,7 +94,7 @@ where
                         }
                         let r = match catch_unwind(AssertUnwindSafe(|| f(&items[i]))) {
                             Ok(v) => v,
-                            Err(_) => Err(anyhow::anyhow!(panic_msg)),
+                            Err(_) => Err(E::from_worker_panic(panic_msg)),
                         };
                         claimed.push((i, r));
                     }
@@ -100,7 +113,7 @@ where
             .collect()
     });
 
-    let mut slots: Vec<Option<Result<R>>> = (0..n).map(|_| None).collect();
+    let mut slots: Vec<Option<std::result::Result<R, E>>> = (0..n).map(|_| None).collect();
     for chunk in per_worker {
         for (i, r) in chunk {
             slots[i] = Some(r);
@@ -120,14 +133,14 @@ mod tests {
 
     #[test]
     fn empty_input_returns_empty() {
-        let out = try_map::<u32, u32, _>(&[], 4, "x", |_| Ok(0));
+        let out = try_map::<u32, u32, GitError, _>(&[], 4, "x", |_| Ok(0));
         assert!(out.is_empty());
     }
 
     #[test]
     fn results_are_positionally_aligned() {
         let items: Vec<usize> = (0..100).collect();
-        let out = try_map(&items, 8, "panic", |&v| Ok::<_, anyhow::Error>(v * 2));
+        let out = try_map(&items, 8, "panic", |&v| Ok::<_, GitError>(v * 2));
         assert_eq!(out.len(), 100);
         for (i, r) in out.iter().enumerate() {
             assert_eq!(*r.as_ref().unwrap(), i * 2, "slot {i} misaligned");
@@ -146,7 +159,7 @@ mod tests {
             // Hold the slot briefly so overlap is observable.
             std::thread::sleep(Duration::from_millis(2));
             live.fetch_sub(1, Ordering::SeqCst);
-            Ok::<_, anyhow::Error>(())
+            Ok::<_, GitError>(())
         });
         assert_eq!(out.len(), 64);
         assert!(
@@ -161,7 +174,7 @@ mod tests {
         // Fewer items than the cap must not spawn idle workers past the count,
         // and the results must still be complete and aligned.
         let items = [10usize, 20, 30];
-        let out = try_map(&items, 64, "panic", |&v| Ok::<_, anyhow::Error>(v + 1));
+        let out = try_map(&items, 64, "panic", |&v| Ok::<_, GitError>(v + 1));
         assert_eq!(
             out.iter().map(|r| *r.as_ref().unwrap()).collect::<Vec<_>>(),
             vec![11, 21, 31]
@@ -175,7 +188,7 @@ mod tests {
             if v == 5 {
                 panic!("intentional test panic");
             }
-            Ok::<_, anyhow::Error>(v)
+            Ok::<_, GitError>(v)
         });
         for (i, r) in out.iter().enumerate() {
             if i == 5 {
@@ -194,7 +207,9 @@ mod tests {
             if v % 2 == 0 {
                 Ok(v)
             } else {
-                Err(anyhow::anyhow!("odd {v}"))
+                Err(GitError::NoCommitDates {
+                    branch: format!("odd {v}"),
+                })
             }
         });
         assert!(out[0].is_ok());

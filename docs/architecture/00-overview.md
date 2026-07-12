@@ -230,11 +230,17 @@ configuration when they are missing.
   approximate; the confidence score and `## Sources` section exist precisely
   because the heuristic can be wrong, and refining it is a known candidate for
   experimentation.
-- **Roadmap — library maturity & OSS health (upcoming, not yet implemented).**
-  A drafted, not-yet-built work stream covers the public library API, typed
-  errors, observability, and community files. Its design lives in
-  [`docs/superpowers/specs/2026-06-26-library-maturity-oss-health-design.md`](../superpowers/specs/2026-06-26-library-maturity-oss-health-design.md)
-  and is tracked here as upcoming work, not as current behavior.
+- **Typed errors (implemented).** The library API returns domain-specific
+  `thiserror` enums (`QueryError`, `GitError`, `ConfigError`, …) aggregated as
+  `OpenLoopsError` at the CLI boundary ([`src/error.rs`](../../src/error.rs)).
+  `main` prints failures with `error_chain()` so nested causes (e.g. TOML parse
+  errors) remain visible. Breaking change for lib consumers — see CHANGELOG
+  *unreleased*.
+- **Roadmap — library maturity & OSS health (partially implemented).** Typed
+  errors (spec §4.1) are done. Still upcoming: observability (`tracing`,
+  `--verbose`, spec §4.3), proptest/coverage gates (§4.2), and community files
+  (§4.4). Design:
+  [`docs/superpowers/specs/2026-06-26-library-maturity-oss-health-design.md`](../superpowers/specs/2026-06-26-library-maturity-oss-health-design.md).
 
 ## References
 

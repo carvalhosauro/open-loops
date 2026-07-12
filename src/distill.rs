@@ -1,12 +1,14 @@
 //! Distillation: builds the prompt with evidence (git + sessions) and calls the
 //! LLM via a configurable command (default "claude -p"). Injectable command means
 //! tests use `cat` and users can swap LLMs without changing code.
+use crate::error::DistillError;
 use crate::output;
 use crate::scanner::OpenLoop;
 use crate::sessions::SessionExcerpt;
-use anyhow::{bail, Context, Result};
 use std::io::Write;
 use std::process::{Command, Stdio};
+
+type Result<T> = std::result::Result<T, DistillError>;
 
 /// How well AI sessions align with git evidence for a branch.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -111,33 +113,31 @@ pub fn run_llm(llm_command: &str, prompt: &str) -> Result<String> {
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
-        .with_context(|| {
-            format!(
-                "failed to run the LLM command `{llm_command}` — \
-                 is it installed? Adjust llm_command in config.toml"
-            )
+        .map_err(|source| DistillError::SpawnFailed {
+            command: llm_command.to_string(),
+            source,
         })?;
     child
         .stdin
         .take()
-        .ok_or_else(|| anyhow::anyhow!("stdin not available for the LLM process"))?
+        .ok_or(DistillError::NoStdin)?
         .write_all(prompt.as_bytes())
         .or_else(|e| {
             // broken pipe means the LLM exited before reading all of stdin — that's fine
             if e.kind() == std::io::ErrorKind::BrokenPipe {
                 Ok(())
             } else {
-                Err(e).context("failed to write the prompt to the LLM stdin")
+                Err(DistillError::WriteFailed { source: e })
             }
         })?;
     let out = child
         .wait_with_output()
-        .context("failed to wait for the LLM process")?;
+        .map_err(|source| DistillError::WaitFailed { source })?;
     if !out.status.success() {
-        bail!(
-            "LLM command failed (`{llm_command}`): {}",
-            String::from_utf8_lossy(&out.stderr).trim()
-        );
+        return Err(DistillError::CommandFailed {
+            command: llm_command.to_string(),
+            stderr: String::from_utf8_lossy(&out.stderr).trim().to_string(),
+        });
     }
     Ok(String::from_utf8_lossy(&out.stdout).into_owned())
 }
@@ -313,7 +313,10 @@ mod tests {
     #[test]
     fn run_llm_contextual_error_when_command_fails() {
         let err = run_llm("false", "x").unwrap_err();
-        assert!(err.to_string().contains("LLM command failed"));
+        assert!(
+            matches!(err, DistillError::CommandFailed { .. }),
+            "got: {err:?}"
+        );
     }
 
     #[test]

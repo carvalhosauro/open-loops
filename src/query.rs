@@ -2,7 +2,7 @@
 //! Grammar lives in ADR 0003. This module turns a query string into a
 //! `ScanPlan` and decides whether a candidate loop matches it.
 use crate::config::Config;
-use anyhow::{bail, Result};
+use crate::error::QueryError;
 use chrono::{DateTime, Duration, Utc};
 
 /// Numeric/temporal comparator for `idle`/`ahead`/`behind`.
@@ -66,7 +66,7 @@ pub struct Candidate<'a> {
 
 /// Parses a query string into a `ScanPlan`. Tokens split on whitespace only —
 /// a `/` is literal inside a term.
-pub fn parse(input: &str) -> Result<ScanPlan> {
+pub fn parse(input: &str) -> Result<ScanPlan, QueryError> {
     let mut plan = ScanPlan::default();
     for tok in input.split_whitespace() {
         match tok {
@@ -78,11 +78,13 @@ pub fn parse(input: &str) -> Result<ScanPlan> {
                 plan.include_ignored = false;
                 continue;
             }
-            "+stale" => bail!("'+stale' is not supported yet (ADR 0003 phase 5)"),
+            "+stale" => return Err(QueryError::ReservedStale),
             _ => {}
         }
         if tok.starts_with(':') {
-            bail!("reports ({tok}) are not supported yet (ADR 0003 phase 5)");
+            return Err(QueryError::ReservedReport {
+                token: tok.to_string(),
+            });
         }
         if let Some((attr, val)) = split_attr(tok) {
             match attr {
@@ -91,8 +93,8 @@ pub fn parse(input: &str) -> Result<ScanPlan> {
                 Attr::Key => plan.key_filters.push(val.to_string()),
                 Attr::Root => plan.root_filters.push(val.to_string()),
                 Attr::Idle => {
-                    let (cmp, rest) = split_cmp(val, true)
-                        .ok_or_else(|| anyhow::anyhow!("idle needs a comparator, e.g. idle:>7d"))?;
+                    let (cmp, rest) =
+                        split_cmp(val, true).ok_or(QueryError::IdleMissingComparator)?;
                     plan.attr_filters
                         .push(AttrFilter::Idle(cmp, parse_duration(rest)?));
                 }
@@ -146,17 +148,17 @@ fn is_context_reset(name: &str) -> bool {
 
 /// Enforces the at-most-one-`@context` rule and returns the lone `@`-token
 /// (including its `@` prefix), or `None` when the query has no context token.
-fn single_context_token<'a>(tokens: &[&'a str]) -> Result<Option<&'a str>> {
+fn single_context_token<'a>(tokens: &[&'a str]) -> Result<Option<&'a str>, QueryError> {
     let mut at_tokens = tokens.iter().filter(|t| t.starts_with('@'));
     let first = at_tokens.next();
     if at_tokens.next().is_some() {
-        bail!("only one @context per query");
+        return Err(QueryError::MultipleContexts);
     }
     Ok(first.copied())
 }
 
 /// Parses `@` usage for config persistence (call after [`resolve_plan`] succeeds).
-pub fn context_persistence_from_query(input: &str) -> Result<ContextPersistence> {
+pub fn context_persistence_from_query(input: &str) -> Result<ContextPersistence, QueryError> {
     let tokens: Vec<&str> = input.split_whitespace().collect();
     match single_context_token(&tokens)? {
         None => Ok(ContextPersistence::Unchanged),
@@ -209,20 +211,30 @@ pub fn merge_scan_plans(base: ScanPlan, overlay: ScanPlan) -> ScanPlan {
     }
 }
 
-fn validate_context_filter(name: &str, filter: &str) -> Result<()> {
+fn validate_context_filter(name: &str, filter: &str) -> Result<(), QueryError> {
     for tok in filter.split_whitespace() {
         if tok.contains('@') {
-            bail!("context '{name}' filter token '{tok}' cannot contain '@' (reports are ADR 0003 phase 5)");
+            return Err(QueryError::ContextFilterHasAt {
+                name: name.to_string(),
+                token: tok.to_string(),
+            });
         }
         if tok.starts_with(':') {
-            bail!("context '{name}' filter token '{tok}' cannot contain ':' (reports are ADR 0003 phase 5)");
+            return Err(QueryError::ContextFilterHasColon {
+                name: name.to_string(),
+                token: tok.to_string(),
+            });
         }
     }
     Ok(())
 }
 
 /// Resolves `@context` tokens and default context into a single [`ScanPlan`].
-pub fn resolve_plan(input: &str, cfg: &Config, opts: &ResolveOptions) -> Result<ScanPlan> {
+pub fn resolve_plan(
+    input: &str,
+    cfg: &Config,
+    opts: &ResolveOptions,
+) -> Result<ScanPlan, QueryError> {
     let tokens: Vec<&str> = input.split_whitespace().collect();
     let has_at = single_context_token(&tokens)?.is_some();
     let mut plans = Vec::new();
@@ -320,23 +332,23 @@ fn split_cmp(val: &str, require_op: bool) -> Option<(Cmp, &str)> {
     }
 }
 
-fn parse_count(s: &str) -> Result<u32> {
+fn parse_count(s: &str) -> Result<u32, QueryError> {
     s.parse::<u32>()
-        .map_err(|_| anyhow::anyhow!("expected a number, got '{s}'"))
+        .map_err(|_| QueryError::InvalidNumber(s.to_string()))
 }
 
 /// Parses `<N><unit>` where unit is one of m/h/d/w.
-pub fn parse_duration(s: &str) -> Result<Duration> {
+pub fn parse_duration(s: &str) -> Result<Duration, QueryError> {
     let (num, unit) = s.split_at(s.find(|c: char| !c.is_ascii_digit()).unwrap_or(s.len()));
     let n: i64 = num
         .parse()
-        .map_err(|_| anyhow::anyhow!("invalid duration '{s}' (expected e.g. 7d)"))?;
+        .map_err(|_| QueryError::InvalidDuration(s.to_string()))?;
     match unit {
         "m" => Ok(Duration::minutes(n)),
         "h" => Ok(Duration::hours(n)),
         "d" => Ok(Duration::days(n)),
         "w" => Ok(Duration::weeks(n)),
-        other => bail!("invalid duration unit '{other}' (use m, h, d, or w)"),
+        other => Err(QueryError::InvalidDurationUnit(other.to_string())),
     }
 }
 
@@ -456,14 +468,17 @@ mod tests {
 
     #[test]
     fn idle_without_operator_is_an_error() {
-        let err = parse("idle:7d").unwrap_err().to_string();
-        assert!(err.contains("idle"), "got: {err}");
+        let err = parse("idle:7d").unwrap_err();
+        assert!(matches!(err, QueryError::IdleMissingComparator));
     }
 
     #[test]
     fn bad_duration_unit_is_an_error() {
-        let err = parse("idle:>7y").unwrap_err().to_string();
-        assert!(err.contains("duration"), "got: {err}");
+        let err = parse("idle:>7y").unwrap_err();
+        assert!(
+            matches!(err, QueryError::InvalidDurationUnit(ref u) if u == "y"),
+            "got: {err:?}"
+        );
     }
 
     #[test]
@@ -483,8 +498,16 @@ mod tests {
 
     #[test]
     fn reserved_report_and_stale_error_clearly() {
-        assert!(parse(":hot").unwrap_err().to_string().contains("report"));
-        assert!(parse("+stale").unwrap_err().to_string().contains("stale"));
+        let report_err = parse(":hot").unwrap_err();
+        assert!(
+            matches!(report_err, QueryError::ReservedReport { ref token } if token == ":hot"),
+            "got: {report_err:?}"
+        );
+        let stale_err = parse("+stale").unwrap_err();
+        assert!(
+            matches!(stale_err, QueryError::ReservedStale),
+            "got: {stale_err:?}"
+        );
     }
 
     #[test]
@@ -537,10 +560,15 @@ mod tests {
         let opts = ResolveOptions {
             current_context: Some("work"),
         };
-        let err = resolve_plan("@missing", &cfg, &opts)
-            .unwrap_err()
-            .to_string();
-        assert!(err.contains("unknown context '@missing'"), "got: {err}");
+        let err = resolve_plan("@missing", &cfg, &opts).unwrap_err();
+        assert!(
+            matches!(
+                err,
+                QueryError::Config(crate::error::ConfigError::UnknownContext { ref name })
+                    if name == "missing"
+            ),
+            "got: {err:?}"
+        );
     }
 
     #[test]
@@ -571,9 +599,12 @@ mod tests {
         let opts = ResolveOptions {
             current_context: None,
         };
-        let err = resolve_plan("@bad", &cfg, &opts).unwrap_err().to_string();
-        assert!(err.contains("cannot contain '@'"), "got: {err}");
-        assert!(err.contains("@work"), "got: {err}");
+        let err = resolve_plan("@bad", &cfg, &opts).unwrap_err();
+        assert!(
+            matches!(err, QueryError::ContextFilterHasAt { ref name, ref token }
+                if name == "bad" && token == "@work"),
+            "got: {err:?}"
+        );
     }
 
     #[test]
@@ -582,10 +613,8 @@ mod tests {
         let opts = ResolveOptions {
             current_context: None,
         };
-        let err = resolve_plan("@work @personal", &cfg, &opts)
-            .unwrap_err()
-            .to_string();
-        assert!(err.contains("only one @context per query"), "got: {err}");
+        let err = resolve_plan("@work @personal", &cfg, &opts).unwrap_err();
+        assert!(matches!(err, QueryError::MultipleContexts), "got: {err:?}");
     }
 
     #[test]
@@ -622,8 +651,11 @@ mod tests {
         let opts = ResolveOptions {
             current_context: None,
         };
-        let err = resolve_plan(":hot", &cfg, &opts).unwrap_err().to_string();
-        assert!(err.contains("report"), "got: {err}");
+        let err = resolve_plan(":hot", &cfg, &opts).unwrap_err();
+        assert!(
+            matches!(err, QueryError::ReservedReport { ref token } if token == ":hot"),
+            "got: {err:?}"
+        );
     }
 
     fn cand<'a>(repo: &'a str, branch: &'a str, key: &'a str, days_idle: i64) -> Candidate<'a> {

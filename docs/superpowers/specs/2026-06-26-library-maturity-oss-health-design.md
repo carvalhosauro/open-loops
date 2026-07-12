@@ -1,7 +1,9 @@
 # open-loops — Spec: maturidade da lib + saúde OSS (WAVE 4)
 
 - **Data:** 2026-06-26
-- **Status:** rascunho — derivado de brainstorm; aguardando revisão do autor
+- **Status:** em progresso — §4.1 (erros tipados) implementado em
+  [`feat/typed-errors`](https://github.com/carvalhosauro/open-loops/pull/45); §4.2–4.4
+  pendentes
 - **Produto:** API pública da lib, testes, observabilidade, arquivos de comunidade
 - **Depende de:**
   - `docs/architecture/09-build-ci-release.md` (WAVE 1, ex-ci-hardening-design) — matriz cross-OS, `--locked`,
@@ -319,11 +321,11 @@ Settings → Community Standards passa a verde nos três itens.
 ## 10. Definition of Done
 
 ### 4.1 — Error typing
-- [ ] `src/error.rs` com enums por domínio + `OpenLoopsError`.
-- [ ] Todos os módulos `pub` retornam erros tipados (não `anyhow::Result`).
-- [ ] `anyhow` removido de `[dependencies]` da lib; permanece na borda CLI.
-- [ ] Testes migrados para `matches!` / variant asserts (não string de stderr).
-- [ ] CHANGELOG: nota breaking na API da lib.
+- [x] `src/error.rs` com enums por domínio + `OpenLoopsError`.
+- [x] Todos os módulos `pub` retornam erros tipados (não `anyhow::Result`).
+- [x] `anyhow` removido de `[dependencies]` da lib; borda CLI usa `OpenLoopsError` + `error_chain()` (sem dep `anyhow`).
+- [x] Testes migrados para `matches!` / variant asserts (não string de stderr).
+- [x] CHANGELOG: nota breaking na API da lib.
 
 ### 4.2 — Unit tests + proptest
 - [ ] `proptest` em `query.rs` (≥ 3 propriedades estáveis).

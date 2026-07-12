@@ -4,10 +4,12 @@
 //! `~/.open-loops/inventory/<fnv64hex>.json`. The heavy git phase
 //! (`rev-list`) is memoised per `(branch, head_sha, ab_base_sha)` pair.
 //! Reads are tolerant; writes are atomic (tmp → rename).
-use anyhow::{Context, Result};
+use crate::error::{error_chain, InventoryError};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
+
+type Result<T> = std::result::Result<T, InventoryError>;
 
 const INVENTORY_EXT: &str = "json";
 
@@ -57,8 +59,9 @@ impl InventoryStore {
             Ok(f) => Some(f),
             Err(e) => {
                 eprintln!(
-                    "warning: corrupt inventory file {}: {e:#}; ignoring",
-                    path.display()
+                    "warning: corrupt inventory file {}: {}; ignoring",
+                    path.display(),
+                    error_chain(&e)
                 );
                 None
             }
@@ -67,15 +70,21 @@ impl InventoryStore {
 
     /// Atomically writes `file` to `<dir>/<hash>.json` via a tmp file + rename.
     pub fn save(&self, hash: &str, file: &InventoryFile) -> Result<()> {
-        std::fs::create_dir_all(&self.dir)
-            .with_context(|| format!("creating inventory dir {}", self.dir.display()))?;
+        std::fs::create_dir_all(&self.dir).map_err(|source| InventoryError::CreateDirFailed {
+            path: self.dir.clone(),
+            source,
+        })?;
         let final_path = path_for_hash(&self.dir, hash);
         let tmp_path = tmp_path_for_hash(&self.dir, hash);
-        let json = serde_json::to_string_pretty(file).context("serialising inventory file")?;
-        std::fs::write(&tmp_path, &json)
-            .with_context(|| format!("writing tmp inventory {}", tmp_path.display()))?;
-        std::fs::rename(&tmp_path, &final_path)
-            .with_context(|| format!("renaming inventory tmp to {}", final_path.display()))?;
+        let json = serde_json::to_string_pretty(file).map_err(InventoryError::Serialize)?;
+        std::fs::write(&tmp_path, &json).map_err(|source| InventoryError::WriteFailed {
+            path: tmp_path.clone(),
+            source,
+        })?;
+        std::fs::rename(&tmp_path, &final_path).map_err(|source| InventoryError::RenameFailed {
+            path: final_path.clone(),
+            source,
+        })?;
         Ok(())
     }
 
@@ -94,7 +103,10 @@ impl InventoryStore {
             return Ok(());
         }
         for entry in std::fs::read_dir(&self.dir)
-            .with_context(|| format!("reading inventory dir {}", self.dir.display()))?
+            .map_err(|source| InventoryError::ReadDirFailed {
+                path: self.dir.clone(),
+                source,
+            })?
             .flatten()
         {
             let path = entry.path();
@@ -127,8 +139,9 @@ impl InventoryStore {
                 // A concurrent prune already removed it — not worth a warning.
                 Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
                 Err(e) => eprintln!(
-                    "warning: failed to remove {reason} inventory {}: {e:#}",
-                    path.display()
+                    "warning: failed to remove {reason} inventory {}: {}",
+                    path.display(),
+                    error_chain(&e)
                 ),
             }
         }

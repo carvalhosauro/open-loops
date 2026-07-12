@@ -5,6 +5,7 @@ pub mod cache;
 pub mod cli;
 pub mod config;
 pub mod distill;
+pub mod error;
 pub mod ignores;
 pub mod index;
 pub mod inventory;

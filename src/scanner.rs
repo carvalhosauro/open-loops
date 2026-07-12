@@ -1,13 +1,16 @@
 //! Repository and unmerged-branch discovery via git shell-out.
 //! Design decision: shell-out (not git2/gix) — simple and debuggable;
 //! the product performance bottleneck is the LLM, not git.
-use anyhow::{bail, Context, Result};
+use crate::error::{error_chain, GitError};
 use chrono::{DateTime, Utc};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use crate::index::Index;
 use crate::inventory::{self, InventoryFile, InventoryStore, LoopMemo};
+
+/// Scanner shell-out and discovery errors.
+type ScanResult<T> = Result<T, GitError>;
 
 /// Inventory update produced by one `open_loops` call: `(common-dir hash, file)`.
 type InvUpdate = (String, InventoryFile);
@@ -30,20 +33,28 @@ pub struct ScanOptions {
 /// # Errors
 ///
 /// Returns `Err` if git is not in PATH or if the command fails.
-pub(crate) fn git(repo: &Path, args: &[&str]) -> Result<String> {
+pub(crate) fn git(repo: &Path, args: &[&str]) -> ScanResult<String> {
     let out = Command::new("git")
         .arg("-C")
         .arg(repo)
         .args(args)
         .output()
-        .context("git not found in PATH — install git")?;
+        .map_err(|source| {
+            if source.kind() == std::io::ErrorKind::NotFound {
+                GitError::NotInPath(source)
+            } else {
+                GitError::SpawnFailed {
+                    repo: repo.to_path_buf(),
+                    source,
+                }
+            }
+        })?;
     if !out.status.success() {
-        bail!(
-            "git {:?} failed in {}: {}",
-            args,
-            repo.display(),
-            String::from_utf8_lossy(&out.stderr).trim()
-        );
+        return Err(GitError::CommandFailed {
+            repo: repo.to_path_buf(),
+            command: format!("{args:?}"),
+            stderr: String::from_utf8_lossy(&out.stderr).trim().to_string(),
+        });
     }
     Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
 }
@@ -54,7 +65,7 @@ pub(crate) fn git(repo: &Path, args: &[&str]) -> Result<String> {
 /// # Errors
 ///
 /// Returns `Err` if no default branch is found.
-pub fn default_branch(repo: &Path) -> Result<String> {
+pub fn default_branch(repo: &Path) -> ScanResult<String> {
     let (name, _) = default_branch_and_sha(repo)?;
     Ok(name)
 }
@@ -69,7 +80,7 @@ pub fn default_branch(repo: &Path) -> Result<String> {
 /// # Errors
 ///
 /// Returns `Err` if no default branch is found.
-fn default_branch_and_sha(repo: &Path) -> Result<(String, String)> {
+fn default_branch_and_sha(repo: &Path) -> ScanResult<(String, String)> {
     if let Ok(sym) = git(
         repo,
         &["symbolic-ref", "--short", "refs/remotes/origin/HEAD"],
@@ -90,10 +101,9 @@ fn default_branch_and_sha(repo: &Path) -> Result<(String, String)> {
             return Ok((candidate.to_string(), sha));
         }
     }
-    bail!(
-        "couldn't find the default branch in {} (expected origin/HEAD, main or master)",
-        repo.display()
-    )
+    Err(GitError::NoDefaultBranch {
+        repo: repo.to_path_buf(),
+    })
 }
 
 /// A git repository discovered under a configured root (deduped by common-dir).
@@ -155,7 +165,7 @@ pub fn repo_name_from_common_dir(common_dir: &Path) -> String {
 /// # Errors
 ///
 /// Returns `Err` when `path` is not inside a git repository.
-pub fn git_common_dir(path: &Path) -> Result<PathBuf> {
+pub fn git_common_dir(path: &Path) -> ScanResult<PathBuf> {
     let raw = git(
         path,
         &["rev-parse", "--path-format=absolute", "--git-common-dir"],
@@ -300,7 +310,7 @@ fn normalize_path(path: PathBuf) -> PathBuf {
 /// # Errors
 ///
 /// Returns `Err` if `git worktree list` fails.
-pub fn worktree_map(repo: &Path) -> Result<std::collections::HashMap<String, PathBuf>> {
+pub fn worktree_map(repo: &Path) -> ScanResult<std::collections::HashMap<String, PathBuf>> {
     let raw = git(repo, &["worktree", "list", "--porcelain"])?;
     Ok(parse_worktree_porcelain(&raw)
         .into_iter()
@@ -366,7 +376,7 @@ fn dedup_candidates_cached(
                 });
             }
             Err(e) => {
-                warnings.push(format!("{}: {e:#}", candidate.display()));
+                warnings.push(format!("{}: {}", candidate.display(), error_chain(&e)));
             }
         }
     }
@@ -425,7 +435,7 @@ pub fn open_loops(
     repo: &Path,
     root_label: &str,
     opts: &ScanOptions,
-) -> Result<(Vec<OpenLoop>, Option<InvUpdate>)> {
+) -> ScanResult<(Vec<OpenLoop>, Option<InvUpdate>)> {
     open_loops_indexed(repo, root_label, opts, None)
 }
 
@@ -453,7 +463,7 @@ pub fn open_loops_indexed(
     root_label: &str,
     opts: &ScanOptions,
     index: Option<&Index>,
-) -> Result<(Vec<OpenLoop>, Option<InvUpdate>)> {
+) -> ScanResult<(Vec<OpenLoop>, Option<InvUpdate>)> {
     // Resolve default branch and its SHA once (PERF-2: avoid duplicate rev-parse).
     let (default, default_sha) = default_branch_and_sha(repo)?;
 
@@ -496,8 +506,9 @@ pub fn open_loops_indexed(
     }
     let worktrees = worktree_map(repo).unwrap_or_else(|e| {
         eprintln!(
-            "warning: git worktree list failed in {}: {e:#}; session matching falls back to the repo path",
-            repo.display()
+            "warning: git worktree list failed in {}: {}; session matching falls back to the repo path",
+            repo.display(),
+            error_chain(&e)
         );
         std::collections::HashMap::new()
     });
@@ -609,7 +620,10 @@ pub fn open_loops_indexed(
         };
 
         let last_commit = DateTime::parse_from_rfc3339(date)
-            .with_context(|| format!("invalid date from git: {date}"))?
+            .map_err(|source| GitError::InvalidCommitDate {
+                date: date.to_string(),
+                source,
+            })?
             .with_timezone(&Utc);
         let repo_path = worktrees
             .get(branch)
@@ -763,7 +777,7 @@ pub fn scan_indexed(
     // bounded worker pool (#16) rather than one thread per repo. Results are
     // positionally aligned with `repos`; `Err` is a fatal git error reported
     // once. The inputs are reused for both the gate read and the write-through.
-    let gate_inputs: Vec<Result<GateInputs>> = crate::parallel::try_map(
+    let gate_inputs: Vec<ScanResult<GateInputs>> = crate::parallel::try_map(
         &repos,
         crate::parallel::default_concurrency(),
         "panic while probing repository",
@@ -780,7 +794,7 @@ pub fn scan_indexed(
             Ok(i) => i,
             // Propagate the git error so the repo is reported once, not retried.
             Err(e) => {
-                warnings.push(format!("{}: {e:#}", repo.path.display()));
+                warnings.push(format!("{}: {}", repo.path.display(), error_chain(&e)));
                 continue;
             }
         };
@@ -836,7 +850,7 @@ fn recompute_misses(
     // scanned at once instead of one thread per miss. Results stay positionally
     // aligned with `misses` so the write-through below can pair each with its
     // precomputed gate inputs by index.
-    let results: Vec<Result<(Vec<OpenLoop>, Option<InvUpdate>)>> = crate::parallel::try_map(
+    let results: Vec<ScanResult<(Vec<OpenLoop>, Option<InvUpdate>)>> = crate::parallel::try_map(
         misses,
         crate::parallel::default_concurrency(),
         "panic while scanning repository",
@@ -861,7 +875,7 @@ fn recompute_misses(
                     inventory_updates.push(update);
                 }
             }
-            Err(e) => warnings.push(format!("{}: {e:#}", repo.path.display())),
+            Err(e) => warnings.push(format!("{}: {}", repo.path.display(), error_chain(&e))),
         }
     }
     inventory_updates
@@ -872,7 +886,7 @@ fn recompute_misses(
 /// # Errors
 ///
 /// Returns `Err` if the default branch or common-dir cannot be resolved.
-fn compute_gate_inputs(repo: &Path) -> Result<GateInputs> {
+fn compute_gate_inputs(repo: &Path) -> ScanResult<GateInputs> {
     let (default, default_sha) = default_branch_and_sha(repo)?;
     let common_dir = git_common_dir(repo)?;
     let refs_fp = refs_fingerprint(&common_dir);
@@ -948,7 +962,7 @@ fn write_through(repo: &Path, loops: &[OpenLoop], idx: &Index, inputs: &GateInpu
 /// # Errors
 ///
 /// Returns `Err` if git fails.
-pub fn git_log(repo: &Path, default: &str, branch: &str) -> Result<String> {
+pub fn git_log(repo: &Path, default: &str, branch: &str) -> ScanResult<String> {
     git(repo, &["log", "--oneline", &format!("{default}..{branch}")])
 }
 
@@ -957,7 +971,7 @@ pub fn git_log(repo: &Path, default: &str, branch: &str) -> Result<String> {
 /// # Errors
 ///
 /// Returns `Err` if git fails.
-pub fn diffstat(repo: &Path, default: &str, branch: &str) -> Result<String> {
+pub fn diffstat(repo: &Path, default: &str, branch: &str) -> ScanResult<String> {
     git(repo, &["diff", "--stat", &format!("{default}...{branch}")])
 }
 
@@ -972,7 +986,7 @@ pub fn commit_window(
     repo: &Path,
     default: &str,
     branch: &str,
-) -> Result<(DateTime<Utc>, DateTime<Utc>)> {
+) -> ScanResult<(DateTime<Utc>, DateTime<Utc>)> {
     let raw = git(
         repo,
         &["log", "--format=%cI", &format!("{default}..{branch}")],
@@ -991,18 +1005,23 @@ pub fn commit_window(
         .iter()
         .min()
         .copied()
-        .ok_or_else(|| anyhow::anyhow!("no commit dates for {branch}"))?;
+        .ok_or_else(|| GitError::NoCommitDates {
+            branch: branch.to_string(),
+        })?;
     let max = dates
         .iter()
         .max()
         .copied()
-        .ok_or_else(|| anyhow::anyhow!("no commit dates for {branch}"))?;
+        .ok_or_else(|| GitError::NoCommitDates {
+            branch: branch.to_string(),
+        })?;
     Ok((min, max))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::error::GitError;
     use crate::index::Index;
     use crate::testutil;
 
@@ -1089,7 +1108,13 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         // directory is not a git repo
         let err = git(tmp.path(), &["status"]).unwrap_err();
-        assert!(err.to_string().contains(&tmp.path().display().to_string()));
+        match &err {
+            GitError::CommandFailed { repo, command, .. } => {
+                assert_eq!(repo, tmp.path());
+                assert_eq!(command, r#"["status"]"#);
+            }
+            other => panic!("expected CommandFailed, got {other:?}"),
+        }
     }
 
     #[test]
@@ -1463,7 +1488,7 @@ mod tests {
         testutil::git(repo, &["init", "-b", "trunk"]);
         // no commits: refs/heads/main and refs/heads/master do not exist
         let err = default_branch(repo).unwrap_err();
-        assert!(err.to_string().contains("couldn't find the default branch"));
+        assert!(matches!(err, GitError::NoDefaultBranch { .. }));
     }
 
     #[test]

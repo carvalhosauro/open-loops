@@ -19,7 +19,7 @@ fn main() {
         Some(Command::Refresh { query }) => cli::run_refresh(&base, &query.join(" ")),
     };
     if let Err(e) = result {
-        eprintln!("error: {e:#}");
+        eprintln!("error: {}", open_loops::error::error_chain(&e));
         std::process::exit(1);
     }
 }

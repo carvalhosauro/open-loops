@@ -16,6 +16,8 @@ CI runs on ubuntu/macos/windows; MSRV 1.89 enforced by dedicated `msrv` job.
 
 ## Estrutura
 
+- `src/error.rs` — erros tipados por domínio (`QueryError`, `GitError`, …) +
+  `OpenLoopsError`; `error_chain()` na borda CLI (`main.rs`)
 - `src/scanner.rs` — repos e branches via shell-out ao git
 - `src/sessions/` — trait SessionSource + adapter claude_code (NUNCA acople
   formato de sessão fora deste diretório; Fase 3 adiciona outros harnesses)
@@ -28,6 +30,8 @@ CI runs on ubuntu/macos/windows; MSRV 1.89 enforced by dedicated `msrv` job.
 ## Convenções
 
 - Conventional Commits (hook valida); mensagens de erro em EN, acionáveis
+- API da lib: `Result<T, DomainError>` / `OpenLoopsError` na borda CLI — sem `anyhow`
+- Testes de erro: preferir `matches!` em variants; não assertar stderr do git
 - Parsing de sessão é tolerante: linha ruim = skip + warning, nunca abort
 - Testes criam repos git reais em tempdir (`src/testutil.rs`)
 - Docs fazem parte do Definition of Done (checklist do PR)
