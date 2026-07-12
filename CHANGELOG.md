@@ -15,6 +15,12 @@
   `error: …` sink in `main` stays a plain `eprintln!` (user-facing failure
   output, not a log event).
 
+### Docs
+- Add community health files (WAVE 4.4): `CONTRIBUTING.md` (dev workflow,
+  Conventional Commits, docs-as-Done), `CODE_OF_CONDUCT.md` (Contributor Covenant
+  2.1), and `SECURITY.md` (local-CLI scope, private reporting, non-vulnerabilities).
+  Link them from the README. Status badges were already present.
+
 ## 1.6.3 - 2026-07-12
 
 ### Internals

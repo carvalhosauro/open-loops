@@ -125,6 +125,12 @@ asciinema play docs/demo.cast   # replay the bundled recording
 Full reference in [`docs/`](docs/): [setup](docs/setup.md) ·
 [features](docs/features.md) · [configuration](docs/configuration.md).
 
+## Contributing
+
+Contributions are welcome — see [`CONTRIBUTING.md`](CONTRIBUTING.md) for the dev
+workflow and conventions, [`SECURITY.md`](SECURITY.md) to report a vulnerability,
+and the [Code of Conduct](CODE_OF_CONDUCT.md).
+
 ## License
 
 MIT OR Apache-2.0.

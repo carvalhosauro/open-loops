@@ -237,9 +237,9 @@ configuration when they are missing.
   errors) remain visible. Breaking change for lib consumers — see CHANGELOG
   *unreleased*.
 - **Roadmap — library maturity & OSS health (partially implemented).** Typed
-  errors (spec §4.1), query-engine `proptest` (spec §4.2), and observability
-  (`tracing` + `--verbose`, spec §4.3) are done. Still upcoming: community files
-  (§4.4). Design:
+  errors (spec §4.1), query-engine `proptest` (spec §4.2), observability
+  (`tracing` + `--verbose`, spec §4.3), and community-health files (§4.4 —
+  `CONTRIBUTING`, `CODE_OF_CONDUCT`, `SECURITY`) are all done. Design:
   [`docs/superpowers/specs/2026-06-26-library-maturity-oss-health-design.md`](../superpowers/specs/2026-06-26-library-maturity-oss-health-design.md).
 
 ## References
