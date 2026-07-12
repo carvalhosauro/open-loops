@@ -14,7 +14,8 @@ Override the base directory: `OPEN_LOOPS_HOME` environment variable.
 | `aliases` | table | `{}` | Per-root label override, keyed by canonical root path (resolves key collisions) |
 | `inventory_ttl_secs` | integer | `0` | Seconds before a cached ahead/behind entry expires; `0` = SHA-only validation, no time-based expiry |
 | `stale_threshold` | duration | `"14d"` | Idle cutoff the `+stale` query shortcut expands to (`idle:>{stale_threshold}`); units `m`/`h`/`d`/`w` |
-| `[contexts.X]` | table | — | Saved scope; `filter` is a query string |
+| `[contexts.X]` | table | — | Saved scope selected with `@X`; `filter` is a query string |
+| `[reports.X]` | table | — | Saved query invoked ad-hoc with `:X`; `filter` is a query string (no nested `@`/`:`) |
 
 ## Contexts
 
@@ -42,6 +43,30 @@ loops @work          # switch to work and persist in state.toml
 loops                # uses current context from state.toml
 loops @none          # clear state and show full universe for this run
 ```
+
+## Reports
+
+Reports are saved queries invoked with `:name`. Define them in `config.toml`:
+
+```toml
+[reports.hot]
+filter = "idle:>14d ahead:>0"
+
+[reports.review]
+filter = "root:~/work behind:>0"
+```
+
+Each `filter` is a query fragment, the same grammar as a context filter. A report
+is **not** persisted (unlike the active context) — it applies only to the run that
+names it — and it composes with other tokens (AND):
+
+```bash
+loops :hot                # run the saved query
+loops :hot repo:api       # report AND repo:api
+```
+
+MVP report filters cannot embed a `@context` or another `:report`; both are
+rejected with a clear error (nesting is a later phase).
 
 ## Repository discovery
 

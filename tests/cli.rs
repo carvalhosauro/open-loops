@@ -1,6 +1,6 @@
 //! E2E: real binary, real git repos, LLM replaced by `cat`.
 use assert_cmd::Command;
-use open_loops::config::{ContextDef, Store};
+use open_loops::config::{ContextDef, ReportDef, Store};
 use open_loops::sessions::claude_code::encode_project_path;
 use open_loops::state::State;
 use predicates::prelude::*;
@@ -1404,6 +1404,59 @@ fn stale_shortcut_filters_by_idle_threshold() {
         .success()
         .stdout(predicate::str::contains("app/feat/old"))
         .stdout(predicate::str::contains("app/feat/recent").not());
+}
+
+#[test]
+fn report_expands_saved_filter() {
+    let tmp = tempfile::tempdir().unwrap();
+    let home = tmp.path().join("home");
+    let root = tmp.path().join("projetos");
+    let repo = root.join("app");
+    std::fs::create_dir_all(&repo).unwrap();
+    git(&repo, &["init", "-b", "main"]);
+    std::fs::write(repo.join("a.txt"), "base").unwrap();
+    git(&repo, &["add", "."]);
+    git(&repo, &["commit", "-m", "init"]);
+
+    git(&repo, &["checkout", "-b", "feat/recent"]);
+    std::fs::write(repo.join("recent.txt"), "recent").unwrap();
+    git(&repo, &["add", "."]);
+    git(&repo, &["commit", "-m", "recent wip"]);
+    git(&repo, &["checkout", "main"]);
+
+    git(&repo, &["checkout", "-b", "feat/old"]);
+    std::fs::write(repo.join("old.txt"), "old").unwrap();
+    git(&repo, &["add", "."]);
+    git_commit_with_date(&repo, "2020-01-01 00:00:00 +0000", "old wip");
+    git(&repo, &["checkout", "main"]);
+
+    loops(&home).arg("init").arg(&root).assert().success();
+
+    // define [reports.hot] = "idle:>14d"
+    let store = Store::new(home.clone());
+    let mut cfg = store.load().unwrap();
+    cfg.reports.insert(
+        "hot".into(),
+        ReportDef {
+            filter: "idle:>14d".into(),
+        },
+    );
+    store.save(&cfg).unwrap();
+
+    // `:hot` resolves the saved filter — old shows, recent hidden.
+    loops(&home)
+        .arg(":hot")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("app/feat/old"))
+        .stdout(predicate::str::contains("app/feat/recent").not());
+
+    // unknown report gives an actionable error.
+    loops(&home)
+        .arg(":missing")
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("unknown report ':missing'"));
 }
 
 #[test]

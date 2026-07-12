@@ -100,9 +100,10 @@ A query travels four stages: the CLI wrapper resolves the active context and
 persists any switch; `resolve_plan` expands `@context` tokens and AND-merges them
 with the ad-hoc tokens into one `ScanPlan`; discovery scans (honouring the
 pushed-down `repo:` hint); and `ScanPlan::matches` filters the discovered loops in
-memory. `+stale` expands to `idle:>{stale_threshold}` during resolution; the
-still-reserved `:report` token is rejected with a clear "not supported yet" error
-during parsing, so the grammar stays stable.
+memory. `resolve_plan` also expands `:report` tokens to their saved filters (like
+`@context`) and `+stale` to `idle:>{stale_threshold}`. `parse` itself still
+rejects a raw leading-`:` token as a grammar guard, but top-level `:report` tokens
+are intercepted by `resolve_plan` before they reach `parse`.
 
 ```mermaid
 flowchart TD
@@ -111,7 +112,7 @@ flowchart TD
 
     resolve --> hasat{query has @ token?}
     hasat -->|no| usedef["apply active context<br/>(state.toml) if any"]
-    hasat -->|yes| expand["expand named @context<br/>via config.context_filter"]
+    hasat -->|yes| expand["expand @context / :report<br/>via config filters"]
     usedef --> subparse
     expand --> subparse
 
@@ -121,7 +122,6 @@ flowchart TD
     toks -->|repo: branch: key: root:| subs["push substring filter"]
     toks -->|idle: ahead: behind:| attr["split comparator,<br/>push AttrFilter"]
     toks -->|bare term| term["push term"]
-    toks -->|:report| rep["QueryError: not supported yet"]
 
     flag --> merge
     stale --> merge
@@ -187,12 +187,13 @@ is the single source of truth for recognised names:
 | `-ignored` | hide dismissed loops (sets `include_ignored = false`); this is the default state, so it is only meaningful as an explicit override of a `+ignored` contributed by a merged context filter ([`src/query.rs:77`](../../src/query.rs:77)) |
 | `@<name>` | select context `<name>`; `@none`/`@all` clear the active context |
 | `<anything else>` | bare term (including unknown `name:value`, e.g. `foo:bar`) |
-| `:<report>` | **rejected**: reports are reserved for a later phase |
-| `+stale` | **rejected**: `+stale` is reserved for a later phase |
+| `:<report>` | expand saved report `<name>` (`[reports.<name>]`); composes AND, resolved in `resolve_plan` |
+| `+stale` | shortcut for `idle:>{stale_threshold}` (config, default `14d`); expanded in `resolve_plan` |
 
-`@`-token handling is not in `parse` (which rejects only `:report`/`+stale`): `@`
-tokens are extracted by `resolve_plan` ([`src/query.rs:225`](../../src/query.rs:225))
-before `parse` is called, so `parse` never receives them. Persistence of the
+`@`- and `:`-token handling is not in `parse` (which rejects only a raw leading-`:`
+token as a guard): `@context` and `:report` tokens are extracted by `resolve_plan`
+([`src/query.rs:225`](../../src/query.rs:225)) before `parse` is called, so `parse`
+never receives them. Persistence of the
 selected context is decided by `context_persistence_from_query`
 ([`src/query.rs:159`](../../src/query.rs:159)). At most one `@context` is allowed
 per query (`single_context_token`, [`src/query.rs:149`](../../src/query.rs:149)),
@@ -300,10 +301,8 @@ filter (no nesting), and the active context is persisted in the runtime
 `state.toml` rather than in declarative `config.toml`, so a CLI-driven switch never
 rewrites the user's config. The `@` prefix is deliberate — it disambiguates the
 context `@work` from a repo named `work`. `+stale` (a shortcut for
-`idle:>{stale_threshold}`) is implemented (phase 5a): `parse` records it as a flag
-and `resolve_plan` expands it from config. Reports (`:name`) remain deferred; the
-parser still rejects `:name` with a clear error so the grammar is stable when they
-land.
+`idle:>{stale_threshold}`) and reports (`:name`, saved queries in `[reports.X]`)
+are both implemented (phases 5a/5b): `resolve_plan` expands them from config.
 
 ## Extension & limitations
 
@@ -313,11 +312,15 @@ land.
   concrete `Idle` filter and clears the flag, so `+stale` resolves identically to
   the explicit predicate and composes (AND) with any other tokens. A malformed
   `stale_threshold` surfaces as `QueryError::InvalidStaleThreshold`.
-- **Reports `:name` (planned, ex-ADR-0003 phase 5b).** Saved queries invoked with
-  `:name` are designed but not implemented; `parse` rejects `:name` with a "not
-  supported yet" error. When they land, a report filter will be allowed to embed a
-  single `@context` (depth-1 guard), which is why `validate_context_filter` already
-  reasons about `@`/`:` inside filter strings.
+- **Reports `:name` (implemented MVP, phase 5b).** Saved queries defined in
+  `[reports.<name>]` and invoked with `:name`. `resolve_plan` looks up the filter,
+  validates it (`validate_report_filter`), parses it, and AND-merges it with the
+  rest of the query — the same expansion shape as `@context`, but reports are not
+  persisted to `state.toml`. MVP report filters cannot embed a `@context` or another
+  `:report` (rejected via `QueryError::ReportFilterHasAt`/`ReportFilterHasColon`);
+  depth-1 `@context` embedding remains planned. `parse` still rejects a raw
+  leading-`:` token as a guard (`QueryError::ReservedReport`), reached only when
+  `parse` is called directly rather than through `resolve_plan`.
 - **No `OR`/parentheses (v1 limit).** The language is AND-only by design. Adding
   boolean composition would touch the parser, `ScanPlan`, and `merge_scan_plans`;
   it is deferred until a concrete need appears.

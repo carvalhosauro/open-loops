@@ -51,6 +51,12 @@ pub enum QueryError {
     )]
     ContextFilterHasColon { name: String, token: String },
 
+    #[error("report '{name}' filter token '{token}' cannot contain '@' (no nested context yet)")]
+    ReportFilterHasAt { name: String, token: String },
+
+    #[error("report '{name}' filter token '{token}' cannot start with ':' (no nested report)")]
+    ReportFilterHasColon { name: String, token: String },
+
     /// The configured `stale_threshold` is not a valid duration; surfaced when a
     /// query uses `+stale` (which expands to `idle:>{stale_threshold}`).
     #[error("invalid stale_threshold '{0}' in config (expected a duration like 14d)")]
@@ -77,6 +83,9 @@ pub enum QueryError {
 pub enum ConfigError {
     #[error("unknown context '@{name}'; define [contexts.{name}] in config.toml")]
     UnknownContext { name: String },
+
+    #[error("unknown report ':{name}'; define [reports.{name}] in config.toml")]
+    UnknownReport { name: String },
 
     #[error(
         "roots {} and {} share label '{label}'; set an alias in config.toml",
