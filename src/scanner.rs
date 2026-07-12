@@ -39,7 +39,16 @@ pub(crate) fn git(repo: &Path, args: &[&str]) -> ScanResult<String> {
         .arg(repo)
         .args(args)
         .output()
-        .map_err(GitError::NotInPath)?;
+        .map_err(|source| {
+            if source.kind() == std::io::ErrorKind::NotFound {
+                GitError::NotInPath(source)
+            } else {
+                GitError::SpawnFailed {
+                    repo: repo.to_path_buf(),
+                    source,
+                }
+            }
+        })?;
     if !out.status.success() {
         return Err(GitError::CommandFailed {
             repo: repo.to_path_buf(),
@@ -611,8 +620,9 @@ pub fn open_loops_indexed(
         };
 
         let last_commit = DateTime::parse_from_rfc3339(date)
-            .map_err(|_| GitError::InvalidCommitDate {
+            .map_err(|source| GitError::InvalidCommitDate {
                 date: date.to_string(),
+                source,
             })?
             .with_timezone(&Utc);
         let repo_path = worktrees

@@ -51,13 +51,22 @@ pub enum QueryError {
     )]
     ContextFilterHasColon { name: String, token: String },
 
-    /// `:report` and `+stale` tokens: reserved for ADR 0003 phase 5, not
-    /// implemented yet. The message is pre-formatted at the call site because
-    /// the two cases don't share an interpolation shape.
-    #[error("{0}")]
-    ReservedToken(String),
+    /// `+stale`: reserved for ADR 0003 phase 5, not implemented yet.
+    #[error("'+stale' is not supported yet (ADR 0003 phase 5)")]
+    ReservedStale,
+
+    /// `:report` tokens: reserved for ADR 0003 phase 5, not implemented yet.
+    #[error("reports ({token}) are not supported yet (ADR 0003 phase 5)")]
+    ReservedReport { token: String },
 
     /// Wraps `Config::context_filter`'s typed error (`src/config.rs`, spec 4.1c).
+    ///
+    /// Only context-resolution failures (`ConfigError::UnknownContext`) reach the
+    /// top level through here, always as `OpenLoopsError::Query(Config(_))`. The
+    /// file/label `ConfigError` variants surface as `OpenLoopsError::Config(_)`
+    /// instead (they never pass through query resolution), so the two aggregator
+    /// arms carry disjoint `ConfigError` variants — match on `Query(Config(..))`
+    /// for context errors, `Config(..)` for store/label errors.
     #[error(transparent)]
     Config(#[from] ConfigError),
 }
@@ -110,8 +119,12 @@ pub enum ConfigError {
         source: Box<toml::de::Error>,
     },
 
-    #[error(transparent)]
-    Io(#[from] std::io::Error),
+    #[error("writing {}", path.display())]
+    WriteFailed {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
 
     #[error(transparent)]
     TomlSer(#[from] toml::ser::Error),
@@ -120,9 +133,6 @@ pub enum ConfigError {
 /// Errors from the distillation cache (`src/cache.rs`).
 #[derive(Debug, Error)]
 pub enum CacheError {
-    #[error("cache path has no parent directory")]
-    NoParentDir,
-
     #[error(transparent)]
     Io(#[from] std::io::Error),
 }
@@ -183,11 +193,19 @@ pub enum IgnoreError {
         source: std::io::Error,
     },
 
-    #[error("path has no parent directory: {}", path.display())]
-    NoParentDir { path: PathBuf },
+    #[error("creating {}", path.display())]
+    CreateDirFailed {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
 
-    #[error(transparent)]
-    Io(#[from] std::io::Error),
+    #[error("writing {}", path.display())]
+    WriteFailed {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
 
     #[error(transparent)]
     TomlSer(#[from] toml::ser::Error),
@@ -278,27 +296,30 @@ pub enum StateError {
         source: std::io::Error,
     },
 
-    #[error("invalid state.toml at {}", path.display())]
-    InvalidStateToml {
+    // One variant for both state.toml and config.toml (legacy migration): the
+    // filename is already visible in `path.display()`, so the two former
+    // variants that differed only by a hardcoded filename collapse to this.
+    #[error("invalid TOML at {}", path.display())]
+    InvalidToml {
         path: PathBuf,
         // Boxed: see ConfigError::InvalidToml.
         #[source]
         source: Box<toml::de::Error>,
     },
 
-    #[error("invalid config.toml at {}", path.display())]
-    InvalidConfigToml {
+    #[error("creating {}", path.display())]
+    CreateDirFailed {
         path: PathBuf,
-        // Boxed: see ConfigError::InvalidToml.
         #[source]
-        source: Box<toml::de::Error>,
+        source: std::io::Error,
     },
 
-    #[error("path has no parent directory: {}", path.display())]
-    NoParentDir { path: PathBuf },
-
-    #[error(transparent)]
-    Io(#[from] std::io::Error),
+    #[error("writing {}", path.display())]
+    WriteFailed {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
 
     #[error(transparent)]
     TomlSer(#[from] toml::ser::Error),
@@ -317,6 +338,13 @@ pub enum GitError {
     #[error("git not found in PATH — install git")]
     NotInPath(#[source] std::io::Error),
 
+    #[error("failed to run git in {}", repo.display())]
+    SpawnFailed {
+        repo: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+
     #[error(
         "couldn't find the default branch in {} (expected origin/HEAD, main or master)",
         repo.display()
@@ -324,7 +352,11 @@ pub enum GitError {
     NoDefaultBranch { repo: PathBuf },
 
     #[error("invalid date from git: {date}")]
-    InvalidCommitDate { date: String },
+    InvalidCommitDate {
+        date: String,
+        #[source]
+        source: chrono::ParseError,
+    },
 
     #[error("no commit dates for {branch}")]
     NoCommitDates { branch: String },

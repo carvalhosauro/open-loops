@@ -40,7 +40,10 @@ impl Cache {
     /// Returns `Err` if the directories cannot be created or the file cannot be written.
     pub fn put(&self, lp: &OpenLoop, content: &str) -> Result<()> {
         let path = self.path(lp);
-        std::fs::create_dir_all(path.parent().ok_or(CacheError::NoParentDir)?)?;
+        // `path` is always `self.dir/<label>/<repo>/<file>.md`, so it always has
+        // a parent.
+        let parent = path.parent().expect("cache path always has a parent");
+        std::fs::create_dir_all(parent)?;
         std::fs::write(path, content)?;
         Ok(())
     }

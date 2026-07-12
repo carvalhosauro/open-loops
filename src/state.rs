@@ -30,7 +30,7 @@ impl State {
                 source,
             })?;
             let file: StateFile =
-                toml::from_str(&raw).map_err(|source| StateError::InvalidStateToml {
+                toml::from_str(&raw).map_err(|source| StateError::InvalidToml {
                     path: path.clone(),
                     source: Box::new(source),
                 })?;
@@ -64,14 +64,21 @@ impl State {
     }
 
     fn save(&self) -> Result<()> {
-        let parent = self.path.parent().ok_or_else(|| StateError::NoParentDir {
-            path: self.path.clone(),
+        // `self.path` is `<base>/state.toml`, so it always has a parent.
+        let parent = self.path.parent().expect("state path always has a parent");
+        std::fs::create_dir_all(parent).map_err(|source| StateError::CreateDirFailed {
+            path: parent.to_path_buf(),
+            source,
         })?;
-        std::fs::create_dir_all(parent)?;
         let file = StateFile {
             current_context: self.current_context.clone(),
         };
-        std::fs::write(&self.path, toml::to_string_pretty(&file)?)?;
+        std::fs::write(&self.path, toml::to_string_pretty(&file)?).map_err(|source| {
+            StateError::WriteFailed {
+                path: self.path.clone(),
+                source,
+            }
+        })?;
         Ok(())
     }
 }
@@ -88,11 +95,10 @@ fn legacy_context_from_config(base: &Path) -> Result<Option<String>> {
             })
         }
     };
-    let table: toml::Value =
-        toml::from_str(&raw).map_err(|source| StateError::InvalidConfigToml {
-            path: config_path.clone(),
-            source: Box::new(source),
-        })?;
+    let table: toml::Value = toml::from_str(&raw).map_err(|source| StateError::InvalidToml {
+        path: config_path.clone(),
+        source: Box::new(source),
+    })?;
     Ok(table
         .get("current_context")
         .or_else(|| table.get("default_context"))

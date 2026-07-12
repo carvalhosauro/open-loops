@@ -53,18 +53,28 @@ impl Ignores {
     ///
     /// # Errors
     ///
-    /// Returns an error if the base directory cannot be created, if the path
-    /// has no parent directory, or if writing the file fails.
+    /// Returns an error if the base directory cannot be created or if writing
+    /// the file fails.
     pub fn add(&mut self, key: &str) -> Result<()> {
         self.set.insert(key.to_string());
-        let parent = self.path.parent().ok_or_else(|| IgnoreError::NoParentDir {
-            path: self.path.clone(),
+        // `self.path` is `<base>/ignores.toml`, so it always has a parent.
+        let parent = self
+            .path
+            .parent()
+            .expect("ignores path always has a parent");
+        std::fs::create_dir_all(parent).map_err(|source| IgnoreError::CreateDirFailed {
+            path: parent.to_path_buf(),
+            source,
         })?;
-        std::fs::create_dir_all(parent)?;
         let file = IgnoreFile {
             ignored: self.set.clone(),
         };
-        std::fs::write(&self.path, toml::to_string_pretty(&file)?)?;
+        std::fs::write(&self.path, toml::to_string_pretty(&file)?).map_err(|source| {
+            IgnoreError::WriteFailed {
+                path: self.path.clone(),
+                source,
+            }
+        })?;
         Ok(())
     }
 

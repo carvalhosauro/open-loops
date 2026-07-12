@@ -78,17 +78,13 @@ pub fn parse(input: &str) -> Result<ScanPlan, QueryError> {
                 plan.include_ignored = false;
                 continue;
             }
-            "+stale" => {
-                return Err(QueryError::ReservedToken(
-                    "'+stale' is not supported yet (ADR 0003 phase 5)".to_string(),
-                ))
-            }
+            "+stale" => return Err(QueryError::ReservedStale),
             _ => {}
         }
         if tok.starts_with(':') {
-            return Err(QueryError::ReservedToken(format!(
-                "reports ({tok}) are not supported yet (ADR 0003 phase 5)"
-            )));
+            return Err(QueryError::ReservedReport {
+                token: tok.to_string(),
+            });
         }
         if let Some((attr, val)) = split_attr(tok) {
             match attr {
@@ -504,12 +500,12 @@ mod tests {
     fn reserved_report_and_stale_error_clearly() {
         let report_err = parse(":hot").unwrap_err();
         assert!(
-            matches!(report_err, QueryError::ReservedToken(ref m) if m.contains("report")),
+            matches!(report_err, QueryError::ReservedReport { ref token } if token == ":hot"),
             "got: {report_err:?}"
         );
         let stale_err = parse("+stale").unwrap_err();
         assert!(
-            matches!(stale_err, QueryError::ReservedToken(ref m) if m.contains("stale")),
+            matches!(stale_err, QueryError::ReservedStale),
             "got: {stale_err:?}"
         );
     }
@@ -657,7 +653,7 @@ mod tests {
         };
         let err = resolve_plan(":hot", &cfg, &opts).unwrap_err();
         assert!(
-            matches!(err, QueryError::ReservedToken(ref m) if m.contains("report")),
+            matches!(err, QueryError::ReservedReport { ref token } if token == ":hot"),
             "got: {err:?}"
         );
     }

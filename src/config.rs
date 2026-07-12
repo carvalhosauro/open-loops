@@ -275,7 +275,9 @@ impl Store {
             path: self.base.clone(),
             source,
         })?;
-        std::fs::write(self.config_path(), toml::to_string_pretty(config)?)?;
+        let path = self.config_path();
+        std::fs::write(&path, toml::to_string_pretty(config)?)
+            .map_err(|source| ConfigError::WriteFailed { path, source })?;
         Ok(())
     }
 
@@ -557,6 +559,11 @@ mod tests {
             matches!(err, ConfigError::LabelCollision { ref label, .. } if label == "repos"),
             "got: {err:?}"
         );
+        // The actionable hint lives only in the #[error] message; guard it so a
+        // future edit can't silently drop the "set an alias" guidance.
+        let msg = err.to_string();
+        assert!(msg.contains("share label"), "got: {msg}");
+        assert!(msg.contains("set an alias in config.toml"), "got: {msg}");
     }
 
     #[test]
