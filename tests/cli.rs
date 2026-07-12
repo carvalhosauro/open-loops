@@ -218,10 +218,12 @@ fn list_prints_warnings_for_broken_repos() {
 
     loops(&home).arg("init").arg(&root).assert().success();
 
+    // The warning now travels through `tracing` (level WARN), so assert on the
+    // stable message text rather than a "warning:" prefix.
     loops(&home)
         .assert()
         .success()
-        .stderr(predicate::str::contains("warning"));
+        .stderr(predicate::str::contains("default branch"));
 }
 
 #[test]

@@ -45,6 +45,20 @@ never aborts a command.
 loops --fresh             # bypass the cache and recompute all ahead/behind
 ```
 
+### Verbose output
+
+By default `loops` is quiet: only warnings reach stderr, and stdout stays clean
+for piping. Add `--verbose` (or `-v`) to see phase progress (`scan`, `distill`,
+worktree matching) on stderr. It composes with the standard `RUST_LOG` variable,
+which always takes precedence when set.
+
+```bash
+loops --verbose                       # progress + warnings on stderr
+RUST_LOG=open_loops=debug loops       # same, without the flag
+RUST_LOG=open_loops=info loops resume feat/login
+loops | wc -l                         # stdout unaffected — still pipeable
+```
+
 ### Filtering
 
 ```bash

@@ -30,8 +30,10 @@ type ScanResult = (
     Vec<(String, crate::inventory::InventoryFile)>,
 );
 
+/// Emits a phase progress line. Rendered on stderr only under `--verbose` or
+/// `RUST_LOG=open_loops=info` (default level is `warn`); stdout stays clean.
 fn progress(msg: &str) {
-    eprintln!("{msg}");
+    tracing::info!("{msg}");
 }
 
 /// Loads config and enforces the invariant that at least one root is registered.
@@ -95,8 +97,8 @@ fn write_inventory(
 ) {
     for (hash, file) in updates {
         if let Err(e) = inv_store.save(&hash, &file) {
-            eprintln!(
-                "warning: failed to write inventory for {}: {}",
+            tracing::warn!(
+                "failed to write inventory for {}: {}",
                 file.repo_path.display(),
                 error_chain(&e)
             );
@@ -139,7 +141,7 @@ fn scan_with_inventory(
         index,
     );
     for w in &warnings {
-        eprintln!("warning: {w}");
+        tracing::warn!("{w}");
     }
     Ok((found, inv_updates))
 }
@@ -426,7 +428,7 @@ pub fn run_worktrees(base: &Path) -> Result<()> {
     progress("scanning git worktrees…");
     let (wts, warnings) = worktrees::scan_worktrees(&cfg.roots, cfg.scan_depth);
     for w in &warnings {
-        eprintln!("warning: {w}");
+        tracing::warn!("{w}");
     }
     print!("{}", output::render_worktrees(&wts, chrono::Utc::now()));
     Ok(())

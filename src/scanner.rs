@@ -505,8 +505,8 @@ pub fn open_loops_indexed(
         }
     }
     let worktrees = worktree_map(repo).unwrap_or_else(|e| {
-        eprintln!(
-            "warning: git worktree list failed in {}: {}; session matching falls back to the repo path",
+        tracing::warn!(
+            "git worktree list failed in {}: {}; session matching falls back to the repo path",
             repo.display(),
             error_chain(&e)
         );
@@ -564,7 +564,7 @@ pub fn open_loops_indexed(
         let mut parts = line.split('\t');
         let (Some(branch), Some(sha), Some(date)) = (parts.next(), parts.next(), parts.next())
         else {
-            eprintln!("warning: unexpected line from git for-each-ref ignored: {line:?}");
+            tracing::warn!("unexpected line from git for-each-ref ignored: {line:?}");
             continue;
         };
         if branch == default || merged.contains(branch) {
