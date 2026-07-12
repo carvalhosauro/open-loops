@@ -59,6 +59,12 @@ RUST_LOG=open_loops=info loops resume feat/login
 loops | wc -l                         # stdout unaffected — still pipeable
 ```
 
+On the bare `loops [query]` command the query is a trailing argument that
+captures any following `-`-prefixed token, so put `-v` **before** the query
+(`loops -v api`, not `loops api -v`). The same applies to `--path`/`--fresh`.
+Subcommands (`loops resume q -v`) are unaffected. `RUST_LOG` has no position
+constraint.
+
 ### Filtering
 
 ```bash
