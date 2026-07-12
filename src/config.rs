@@ -43,6 +43,10 @@ pub struct Config {
     /// Named query scopes (`@name` in queries) mapped to filter strings.
     #[serde(default)]
     pub contexts: BTreeMap<String, ContextDef>,
+    /// Idle threshold the `+stale` query shortcut expands to (query duration
+    /// syntax, e.g. `14d`): `+stale` is sugar for `idle:>{stale_threshold}`.
+    #[serde(default = "default_stale_threshold")]
+    pub stale_threshold: String,
 }
 
 fn default_llm_command() -> String {
@@ -67,6 +71,10 @@ fn default_scan_depth() -> usize {
     4
 }
 
+fn default_stale_threshold() -> String {
+    "14d".into()
+}
+
 impl Default for Config {
     fn default() -> Self {
         Self {
@@ -79,6 +87,7 @@ impl Default for Config {
             scan_depth: default_scan_depth(),
             inventory_ttl_secs: 0,
             contexts: BTreeMap::new(),
+            stale_threshold: default_stale_threshold(),
         }
     }
 }

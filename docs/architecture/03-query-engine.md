@@ -295,17 +295,24 @@ resolution predictable: at most one `@` per query, no `@`/`:` inside a context
 filter (no nesting), and the active context is persisted in the runtime
 `state.toml` rather than in declarative `config.toml`, so a CLI-driven switch never
 rewrites the user's config. The `@` prefix is deliberate — it disambiguates the
-context `@work` from a repo named `work`. Reports (`:name`) and `+stale` were
-designed alongside contexts but deferred to a later phase; the parser rejects them
-with a clear error today so the grammar is stable when they land.
+context `@work` from a repo named `work`. `+stale` (a shortcut for
+`idle:>{stale_threshold}`) is implemented (phase 5a): `parse` records it as a flag
+and `resolve_plan` expands it from config. Reports (`:name`) remain deferred; the
+parser still rejects `:name` with a clear error so the grammar is stable when they
+land.
 
 ## Extension & limitations
 
-- **Reports and `+stale` (planned, ex-ADR-0003 phase 5).** Saved queries invoked
-  with `:name`, and `+stale` as a shortcut for `idle:>{stale_threshold}`, are
-  designed but not implemented; both are rejected by `parse` with a "not supported
-  yet" error. When they land, a report filter will be allowed to embed a single
-  `@context` (depth-1 guard), which is why `validate_context_filter` already
+- **`+stale` (implemented, phase 5a).** `+stale` expands to
+  `idle:>{stale_threshold}` (config `stale_threshold`, default `14d`). `parse`
+  sets the `ScanPlan::stale` flag; `resolve_plan::expand_stale` injects the
+  concrete `Idle` filter and clears the flag, so `+stale` resolves identically to
+  the explicit predicate and composes (AND) with any other tokens. A malformed
+  `stale_threshold` surfaces as `QueryError::InvalidStaleThreshold`.
+- **Reports `:name` (planned, ex-ADR-0003 phase 5b).** Saved queries invoked with
+  `:name` are designed but not implemented; `parse` rejects `:name` with a "not
+  supported yet" error. When they land, a report filter will be allowed to embed a
+  single `@context` (depth-1 guard), which is why `validate_context_filter` already
   reasons about `@`/`:` inside filter strings.
 - **No `OR`/parentheses (v1 limit).** The language is AND-only by design. Adding
   boolean composition would touch the parser, `ScanPlan`, and `merge_scan_plans`;
