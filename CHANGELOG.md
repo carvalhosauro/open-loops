@@ -1,6 +1,11 @@
 # Changelog
 ## unreleased
 
+## 1.6.3 - 2026-07-12
+
+### Internals
+- Proptest coverage for the query engine (WAVE 4.2) ([#47](https://github.com/carvalhosauro/open-loops/pull/47))
+
 ### Internals
 - Add property-based tests for the query engine via `proptest` (WAVE 4.2):
   `parse` never panics, unknown `name:value` tokens stay bare terms,
