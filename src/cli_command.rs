@@ -17,6 +17,10 @@ pub struct Cli {
     /// Show a PATH column with each loop's worktree directory (for `cd`)
     #[arg(long, short = 'p')]
     pub path: bool,
+    /// Print progress and diagnostics to stderr (sets `open_loops=debug` unless
+    /// `RUST_LOG` is already set). Composes with `RUST_LOG` for finer control.
+    #[arg(long, short = 'v', global = true)]
+    pub verbose: bool,
 }
 
 #[derive(Subcommand)]

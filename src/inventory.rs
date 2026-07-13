@@ -58,8 +58,8 @@ impl InventoryStore {
         match serde_json::from_str::<InventoryFile>(&raw) {
             Ok(f) => Some(f),
             Err(e) => {
-                eprintln!(
-                    "warning: corrupt inventory file {}: {}; ignoring",
+                tracing::warn!(
+                    "corrupt inventory file {}: {}; ignoring",
                     path.display(),
                     error_chain(&e)
                 );
@@ -135,11 +135,11 @@ impl InventoryStore {
                 None => "unreadable",
             };
             match std::fs::remove_file(&path) {
-                Ok(()) => eprintln!("warning: removed {reason} inventory {}", path.display()),
+                Ok(()) => tracing::warn!("removed {reason} inventory {}", path.display()),
                 // A concurrent prune already removed it — not worth a warning.
                 Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-                Err(e) => eprintln!(
-                    "warning: failed to remove {reason} inventory {}: {}",
+                Err(e) => tracing::warn!(
+                    "failed to remove {reason} inventory {}: {}",
                     path.display(),
                     error_chain(&e)
                 ),

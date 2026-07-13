@@ -1,17 +1,30 @@
 # Changelog
 ## unreleased
 
+### Features
+- Add a global `--verbose`/`-v` flag and `tracing`-based observability (WAVE 4.3).
+  Progress phases (`scan`, `distill`, worktree matching) and recoverable
+  diagnostics are now `tracing` events on stderr. Default level is `warn` (quiet
+  runs, clean stdout for piping); `--verbose` raises the crate to `debug`, and an
+  explicit `RUST_LOG` always takes precedence. ANSI colour is used only on an
+  interactive stderr.
+
+### Internals
+- Migrate progress and warning `eprintln!` calls across `cli`, `scanner`,
+  `inventory`, and `index` to `tracing::info!`/`tracing::warn!`. The final
+  `error: …` sink in `main` stays a plain `eprintln!` (user-facing failure
+  output, not a log event).
+
+### Docs
+- Add community health files (WAVE 4.4): `CONTRIBUTING.md` (dev workflow,
+  Conventional Commits, docs-as-Done), `CODE_OF_CONDUCT.md` (Contributor Covenant
+  2.1), and `SECURITY.md` (local-CLI scope, private reporting, non-vulnerabilities).
+  Link them from the README. Status badges were already present.
+
 ## 1.6.3 - 2026-07-12
 
 ### Internals
 - Proptest coverage for the query engine (WAVE 4.2) ([#47](https://github.com/carvalhosauro/open-loops/pull/47))
-
-### Internals
-- Add property-based tests for the query engine via `proptest` (WAVE 4.2):
-  `parse` never panics, unknown `name:value` tokens stay bare terms,
-  `parse_duration` accepts only `m|h|d|w`, and `idle:>N` is monotonic. Fills
-  parser gaps in `scanner` (malformed and Windows-style worktree lines) and
-  `distill` (multi-session prompt separators).
 
 ## 1.6.2 - 2026-07-12
 

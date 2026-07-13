@@ -30,6 +30,10 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "2"
 toml = "1.1"
+tracing = "0.1"
+# Subscriber is only configured by the binary (main.rs); the library just emits
+# events. Kept as a normal dependency because open-loops is a single lib+bin crate.
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 [dev-dependencies]
 assert_cmd = "2"

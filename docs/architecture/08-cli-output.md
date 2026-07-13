@@ -303,10 +303,20 @@ The full user-facing command and flag reference is in
   plus `OpenLoopsError` ([`src/error.rs`](../../src/error.rs)); `anyhow` is no
   longer a dependency. The CLI remains the primary supported surface; library
   consumers can `match` on error variants.
-- **Observability (planned).** Structured logging via `tracing`, a global
-  `--verbose` flag, and migration of progress `eprintln!` calls are part of the
-  remaining library-maturity work stream tracked in
-  [00-overview](00-overview.md#extension--limitations).
+- **Observability via `tracing` (implemented, spec §4.3).** The library emits
+  structured events (`tracing::info!` for `scan`/`distill`/worktree phases,
+  `tracing::warn!` for recoverable diagnostics); the binary owns the subscriber.
+  `main::init_tracing` ([`src/main.rs`](../../src/main.rs)) installs a stderr
+  subscriber whose level is chosen by precedence: an explicit `RUST_LOG` always
+  wins, else the global `--verbose`/`-v` flag raises the crate to
+  `open_loops=debug`, else the default is `warn`. So an unadorned run is quiet
+  except for warnings and keeps **stdout** clean for piping, while `loops
+  --verbose` (or `RUST_LOG=open_loops=info loops`) surfaces phase progress on
+  stderr. This supersedes the MVP's "progress via raw `eprintln!`" decision; the
+  final `error: …` sink in `main` stays a plain `eprintln!` because it is the
+  user-facing failure output, not a log event. `tracing-subscriber` is a
+  dependency only because open-loops is a single lib+bin crate; library consumers
+  can ignore it and plug their own subscriber.
 
 ## References
 
