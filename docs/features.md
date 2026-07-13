@@ -90,8 +90,8 @@ clearly abandoned this". The threshold defaults to `14d` and is configurable via
 
 Named scopes via `@` tokens. Definitions live in `config.toml` (`[contexts.X]`);
 the active context is persisted in `state.toml` when you pass `@name` on the CLI.
-A context is your daily universe — work vs personal — not the same as reports
-(`:` — coming in phase 5).
+A context is your daily universe — work vs personal — distinct from a report
+(`:`, below): a context sticks until you switch it, a report is a one-off lens.
 
 ```bash
 loops @work              # switch to work (saved in state.toml)
@@ -102,6 +102,22 @@ loops @work api idle:>7d  # compose context + ad-hoc filters
 
 `@none` and `@all` clear `state.toml`. Only one `@` token per query. See
 `docs/configuration.md` for `[contexts.X]` setup.
+
+### Reports
+
+Named, reusable queries invoked ad-hoc with `:name`. Definitions live in
+`config.toml` (`[reports.X]`). Unlike a context, a report is **not** persisted —
+it applies only to the invocation that names it — and it composes (AND) with any
+other tokens, so you can layer ad-hoc filters on top.
+
+```bash
+loops :hot                # run the saved "hot" query
+loops :hot repo:api       # compose: the report AND repo:api
+```
+
+MVP reports are plain saved filters: their definition cannot embed a `@context`
+or another `:report` (rejected with a clear error). See `docs/configuration.md`
+for `[reports.X]` setup.
 
 ## `loops refresh [query]` — reindex inventory
 

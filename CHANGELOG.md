@@ -13,6 +13,11 @@
   composes (AND) with any other query tokens, mirroring `+ignored`. A malformed
   `stale_threshold` surfaces as `QueryError::InvalidStaleThreshold`. Previously
   `+stale` was reserved and rejected by the parser.
+- Add saved reports (ADR 0003 phase 5b): define `[reports.<name>]` in
+  `config.toml` and invoke with `:name` to expand its saved filter, composing
+  (AND) with any other tokens — the same model as `@context`, but reports are not
+  persisted. MVP report filters cannot embed a `@context` or another `:report`
+  (rejected with a clear error). Previously `:report` was reserved.
 
 ### Internals
 - Migrate progress and warning `eprintln!` calls across `cli`, `scanner`,
