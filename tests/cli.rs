@@ -1371,6 +1371,42 @@ fn context_with_idle_filter() {
 }
 
 #[test]
+fn stale_shortcut_filters_by_idle_threshold() {
+    let tmp = tempfile::tempdir().unwrap();
+    let home = tmp.path().join("home");
+    let root = tmp.path().join("projetos");
+    let repo = root.join("app");
+    std::fs::create_dir_all(&repo).unwrap();
+    git(&repo, &["init", "-b", "main"]);
+    std::fs::write(repo.join("a.txt"), "base").unwrap();
+    git(&repo, &["add", "."]);
+    git(&repo, &["commit", "-m", "init"]);
+
+    git(&repo, &["checkout", "-b", "feat/recent"]);
+    std::fs::write(repo.join("recent.txt"), "recent").unwrap();
+    git(&repo, &["add", "."]);
+    git(&repo, &["commit", "-m", "recent wip"]);
+    git(&repo, &["checkout", "main"]);
+
+    git(&repo, &["checkout", "-b", "feat/old"]);
+    std::fs::write(repo.join("old.txt"), "old").unwrap();
+    git(&repo, &["add", "."]);
+    git_commit_with_date(&repo, "2020-01-01 00:00:00 +0000", "old wip");
+    git(&repo, &["checkout", "main"]);
+
+    loops(&home).arg("init").arg(&root).assert().success();
+
+    // `+stale` at the default 14d threshold surfaces the old loop and hides the
+    // fresh one — no config needed.
+    loops(&home)
+        .arg("+stale")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("app/feat/old"))
+        .stdout(predicate::str::contains("app/feat/recent").not());
+}
+
+#[test]
 fn context_unknown_errors() {
     let tmp = tempfile::tempdir().unwrap();
     let home = tmp.path().join("home");

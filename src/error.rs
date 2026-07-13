@@ -51,9 +51,10 @@ pub enum QueryError {
     )]
     ContextFilterHasColon { name: String, token: String },
 
-    /// `+stale`: reserved for ADR 0003 phase 5, not implemented yet.
-    #[error("'+stale' is not supported yet (ADR 0003 phase 5)")]
-    ReservedStale,
+    /// The configured `stale_threshold` is not a valid duration; surfaced when a
+    /// query uses `+stale` (which expands to `idle:>{stale_threshold}`).
+    #[error("invalid stale_threshold '{0}' in config (expected a duration like 14d)")]
+    InvalidStaleThreshold(String),
 
     /// `:report` tokens: reserved for ADR 0003 phase 5, not implemented yet.
     #[error("reports ({token}) are not supported yet (ADR 0003 phase 5)")]

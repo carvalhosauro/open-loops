@@ -8,6 +8,11 @@
   runs, clean stdout for piping); `--verbose` raises the crate to `debug`, and an
   explicit `RUST_LOG` always takes precedence. ANSI colour is used only on an
   interactive stderr.
+- Add the `+stale` query shortcut (ADR 0003 phase 5a): expands to
+  `idle:>{stale_threshold}`, a new `config.toml` field defaulting to `14d`. It
+  composes (AND) with any other query tokens, mirroring `+ignored`. A malformed
+  `stale_threshold` surfaces as `QueryError::InvalidStaleThreshold`. Previously
+  `+stale` was reserved and rejected by the parser.
 
 ### Internals
 - Migrate progress and warning `eprintln!` calls across `cli`, `scanner`,

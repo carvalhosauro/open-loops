@@ -48,6 +48,10 @@ pub struct ScanPlan {
     pub attr_filters: Vec<AttrFilter>,
     /// `+ignored` includes dismissed loops; default hides them.
     pub include_ignored: bool,
+    /// `+stale` was requested. Expanded to `idle:>{stale_threshold}` in
+    /// [`resolve_plan`] (which has the config); `parse` alone only records it,
+    /// since the threshold lives in config, not the query grammar.
+    pub stale: bool,
     /// True when AHEAD/BEHIND must be available (query references them, or the
     /// caller renders the columns — the caller ORs in the render need).
     pub need_ahead_behind: bool,
@@ -78,7 +82,10 @@ pub fn parse(input: &str) -> Result<ScanPlan, QueryError> {
                 plan.include_ignored = false;
                 continue;
             }
-            "+stale" => return Err(QueryError::ReservedStale),
+            "+stale" => {
+                plan.stale = true;
+                continue;
+            }
             _ => {}
         }
         if tok.starts_with(':') {
@@ -207,6 +214,7 @@ pub fn merge_scan_plans(base: ScanPlan, overlay: ScanPlan) -> ScanPlan {
             filters
         },
         include_ignored: base.include_ignored || overlay.include_ignored,
+        stale: base.stale || overlay.stale,
         need_ahead_behind: base.need_ahead_behind || overlay.need_ahead_behind,
     }
 }
@@ -265,14 +273,30 @@ pub fn resolve_plan(
         plans.push(parse(&user_tokens.join(" "))?);
     }
 
-    match plans.len() {
-        0 => Ok(ScanPlan::default()),
-        1 => Ok(plans.remove(0)),
-        _ => Ok(plans
+    let mut plan = match plans.len() {
+        0 => ScanPlan::default(),
+        1 => plans.remove(0),
+        _ => plans
             .into_iter()
             .reduce(merge_scan_plans)
-            .expect("len checked >= 2")),
+            .expect("len checked >= 2"),
+    };
+    expand_stale(&mut plan, cfg)?;
+    Ok(plan)
+}
+
+/// Expands a requested `+stale` into a concrete `idle:>{stale_threshold}` filter
+/// from config, then clears the flag so the resolved plan equals the same query
+/// written with an explicit `idle:>` predicate. No-op when `+stale` was absent.
+fn expand_stale(plan: &mut ScanPlan, cfg: &Config) -> Result<(), QueryError> {
+    if !plan.stale {
+        return Ok(());
     }
+    let dur = parse_duration(&cfg.stale_threshold)
+        .map_err(|_| QueryError::InvalidStaleThreshold(cfg.stale_threshold.clone()))?;
+    plan.attr_filters.push(AttrFilter::Idle(Cmp::Gt, dur));
+    plan.stale = false;
+    Ok(())
 }
 
 /// The closed set of recognized attribute names. Single source of truth so the
@@ -497,17 +521,89 @@ mod tests {
     }
 
     #[test]
-    fn reserved_report_and_stale_error_clearly() {
+    fn reserved_report_errors_clearly() {
         let report_err = parse(":hot").unwrap_err();
         assert!(
             matches!(report_err, QueryError::ReservedReport { ref token } if token == ":hot"),
             "got: {report_err:?}"
         );
-        let stale_err = parse("+stale").unwrap_err();
+    }
+
+    #[test]
+    fn parse_stale_sets_flag_without_filter() {
+        // `parse` alone only records the request; the idle filter is injected by
+        // `resolve_plan`, which has the config threshold.
+        let p = parse("+stale").unwrap();
+        assert!(p.stale);
+        assert!(p.attr_filters.is_empty());
+    }
+
+    #[test]
+    fn resolve_plan_expands_stale_to_idle_threshold() {
+        let cfg = test_cfg(); // no explicit stale_threshold -> default 14d
+        let opts = ResolveOptions {
+            current_context: None,
+        };
+        let got = resolve_plan("+stale", &cfg, &opts).unwrap();
+        // `+stale` resolves exactly like the explicit predicate at the default.
+        assert_eq!(got, parse("idle:>14d").unwrap());
+        assert!(!got.stale, "flag cleared after expansion");
+    }
+
+    #[test]
+    fn resolve_plan_stale_composes_with_terms() {
+        let cfg = test_cfg();
+        let opts = ResolveOptions {
+            current_context: None,
+        };
+        let got = resolve_plan("api +stale", &cfg, &opts).unwrap();
+        assert_eq!(got, parse("api idle:>14d").unwrap());
+    }
+
+    #[test]
+    fn resolve_plan_stale_honours_configured_threshold() {
+        let mut cfg = test_cfg();
+        cfg.stale_threshold = "3w".into();
+        let opts = ResolveOptions {
+            current_context: None,
+        };
+        let got = resolve_plan("+stale", &cfg, &opts).unwrap();
+        assert_eq!(got, parse("idle:>3w").unwrap());
+    }
+
+    #[test]
+    fn resolve_plan_stale_rejects_bad_threshold() {
+        let mut cfg = test_cfg();
+        cfg.stale_threshold = "bogus".into();
+        let opts = ResolveOptions {
+            current_context: None,
+        };
+        let err = resolve_plan("+stale", &cfg, &opts).unwrap_err();
         assert!(
-            matches!(stale_err, QueryError::ReservedStale),
-            "got: {stale_err:?}"
+            matches!(err, QueryError::InvalidStaleThreshold(ref t) if t == "bogus"),
+            "got: {err:?}"
         );
+    }
+
+    #[test]
+    fn resolve_plan_expands_stale_embedded_in_context() {
+        // A `+stale` inside a context filter must survive the sub-plan → merge →
+        // single expansion path (the flag is OR-merged, then expanded once).
+        let cfg = Config {
+            contexts: BTreeMap::from([(
+                "stale-work".into(),
+                ContextDef {
+                    filter: "root:~/work +stale".into(),
+                },
+            )]),
+            ..Config::default()
+        };
+        let opts = ResolveOptions {
+            current_context: None,
+        };
+        let got = resolve_plan("@stale-work", &cfg, &opts).unwrap();
+        assert_eq!(got, parse("root:~/work idle:>14d").unwrap());
+        assert!(!got.stale, "flag cleared after expansion");
     }
 
     #[test]

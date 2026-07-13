@@ -100,8 +100,9 @@ A query travels four stages: the CLI wrapper resolves the active context and
 persists any switch; `resolve_plan` expands `@context` tokens and AND-merges them
 with the ad-hoc tokens into one `ScanPlan`; discovery scans (honouring the
 pushed-down `repo:` hint); and `ScanPlan::matches` filters the discovered loops in
-memory. Reserved-but-unimplemented tokens (`:report`, `+stale`) are rejected with a
-clear "not supported yet" error during parsing, so the grammar stays stable.
+memory. `+stale` expands to `idle:>{stale_threshold}` during resolution; the
+still-reserved `:report` token is rejected with a clear "not supported yet" error
+during parsing, so the grammar stays stable.
 
 ```mermaid
 flowchart TD
@@ -116,16 +117,19 @@ flowchart TD
 
     subparse["parse each part (parse):<br/>tokens to predicates"] --> toks{token kind}
     toks -->|+ignored / -ignored| flag["set include_ignored"]
+    toks -->|+stale| stale["set stale flag<br/>(expanded in resolve_plan)"]
     toks -->|repo: branch: key: root:| subs["push substring filter"]
     toks -->|idle: ahead: behind:| attr["split comparator,<br/>push AttrFilter"]
     toks -->|bare term| term["push term"]
-    toks -->|:report / +stale| rep["QueryError: not supported yet"]
+    toks -->|:report| rep["QueryError: not supported yet"]
 
     flag --> merge
+    stale --> merge
     subs --> merge
     attr --> merge
     term --> merge
-    merge["merge_scan_plans:<br/>AND filters, OR flags"] --> plan[["ScanPlan"]]
+    merge["merge_scan_plans:<br/>AND filters, OR flags"] --> stalex["expand_stale:<br/>+stale to idle:&gt;stale_threshold"]
+    stalex --> plan[["ScanPlan"]]
 
     plan --> rootpd["root_filters to roots subset<br/>(config.resolve_scan_roots)"]
     rootpd --> scan["discovery scan<br/>(repo: pushed down as walk hint)"]
@@ -295,17 +299,24 @@ resolution predictable: at most one `@` per query, no `@`/`:` inside a context
 filter (no nesting), and the active context is persisted in the runtime
 `state.toml` rather than in declarative `config.toml`, so a CLI-driven switch never
 rewrites the user's config. The `@` prefix is deliberate — it disambiguates the
-context `@work` from a repo named `work`. Reports (`:name`) and `+stale` were
-designed alongside contexts but deferred to a later phase; the parser rejects them
-with a clear error today so the grammar is stable when they land.
+context `@work` from a repo named `work`. `+stale` (a shortcut for
+`idle:>{stale_threshold}`) is implemented (phase 5a): `parse` records it as a flag
+and `resolve_plan` expands it from config. Reports (`:name`) remain deferred; the
+parser still rejects `:name` with a clear error so the grammar is stable when they
+land.
 
 ## Extension & limitations
 
-- **Reports and `+stale` (planned, ex-ADR-0003 phase 5).** Saved queries invoked
-  with `:name`, and `+stale` as a shortcut for `idle:>{stale_threshold}`, are
-  designed but not implemented; both are rejected by `parse` with a "not supported
-  yet" error. When they land, a report filter will be allowed to embed a single
-  `@context` (depth-1 guard), which is why `validate_context_filter` already
+- **`+stale` (implemented, phase 5a).** `+stale` expands to
+  `idle:>{stale_threshold}` (config `stale_threshold`, default `14d`). `parse`
+  sets the `ScanPlan::stale` flag; `resolve_plan::expand_stale` injects the
+  concrete `Idle` filter and clears the flag, so `+stale` resolves identically to
+  the explicit predicate and composes (AND) with any other tokens. A malformed
+  `stale_threshold` surfaces as `QueryError::InvalidStaleThreshold`.
+- **Reports `:name` (planned, ex-ADR-0003 phase 5b).** Saved queries invoked with
+  `:name` are designed but not implemented; `parse` rejects `:name` with a "not
+  supported yet" error. When they land, a report filter will be allowed to embed a
+  single `@context` (depth-1 guard), which is why `validate_context_filter` already
   reasons about `@`/`:` inside filter strings.
 - **No `OR`/parentheses (v1 limit).** The language is AND-only by design. Adding
   boolean composition would touch the parser, `ScanPlan`, and `merge_scan_plans`;

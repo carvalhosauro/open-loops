@@ -13,6 +13,7 @@ Override the base directory: `OPEN_LOOPS_HOME` environment variable.
 | `max_session_kb` | integer | `50` | KB read from the end of each session |
 | `aliases` | table | `{}` | Per-root label override, keyed by canonical root path (resolves key collisions) |
 | `inventory_ttl_secs` | integer | `0` | Seconds before a cached ahead/behind entry expires; `0` = SHA-only validation, no time-based expiry |
+| `stale_threshold` | duration | `"14d"` | Idle cutoff the `+stale` query shortcut expands to (`idle:>{stale_threshold}`); units `m`/`h`/`d`/`w` |
 | `[contexts.X]` | table | — | Saved scope; `filter` is a query string |
 
 ## Contexts

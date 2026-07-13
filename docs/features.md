@@ -72,12 +72,19 @@ loops api                 # repos/branches matching "api"
 loops api idle:>7d        # plus idle more than 7 days
 loops repo:api branch:fix/ behind:>0
 loops +ignored            # include dismissed loops
+loops +stale              # only loops idle beyond stale_threshold (default 14d)
+loops api +stale          # compose: "api" AND stale
 ```
 
 Bare terms substring-match the repo, branch, or key (AND across terms).
 Attributes: `repo:`, `branch:`, `key:`, `root:` (substring), `idle:` (needs a
 comparator, e.g. `idle:>7d`; units m/h/d/w), `ahead:`/`behind:` (`>`,`<`,`>=`,
-`<=`, or bare equality). Tags: `-ignored` (default), `+ignored`.
+`<=`, or bare equality). Tags: `-ignored` (default), `+ignored`, `+stale`.
+
+`+stale` is a shortcut for `idle:>{stale_threshold}` — the cutoff for "I've
+clearly abandoned this". The threshold defaults to `14d` and is configurable via
+`stale_threshold` in `config.toml` (see
+[configuration](configuration.md)). It composes with any other tokens (AND).
 
 ### Contexts
 
