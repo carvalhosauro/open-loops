@@ -1,6 +1,16 @@
 # Changelog
 ## unreleased
 
+## 1.7.0 - 2026-07-13
+
+### Docs
+- OSS adoption bundle — README hero, ONBOARDING, launch drafts ([#53](https://github.com/carvalhosauro/open-loops/pull/53))
+
+### Features
+- Saved reports :name (ADR 0003 phase 5b, MVP) ([#52](https://github.com/carvalhosauro/open-loops/pull/52))
+- +stale shortcut (ADR 0003 phase 5a) ([#51](https://github.com/carvalhosauro/open-loops/pull/51))
+- Tracing observability + global --verbose flag (WAVE 4.3) ([#48](https://github.com/carvalhosauro/open-loops/pull/48))
+
 ### Features
 - Add a global `--verbose`/`-v` flag and `tracing`-based observability (WAVE 4.3).
   Progress phases (`scan`, `distill`, worktree matching) and recoverable
