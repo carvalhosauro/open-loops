@@ -24,6 +24,11 @@ cov:
 changelog:
     git cliff -o CHANGELOG.md
 
+# require: cargo install --git https://github.com/asciinema/agg
+# render the asciinema cast to the README demo GIF
+demo-gif:
+    agg docs/demo.cast docs/demo.gif
+
 # deterministic stress benchmark (use `just stress --heavy` for the big scales)
 stress *ARGS:
     bash scripts/stress/bench.sh {{ARGS}}
