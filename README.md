@@ -8,16 +8,9 @@
 > **What did I start and not finish? Where did I leave off? What's the next step?**
 
 `loops` is a git companion that finds your paused work — every unmerged branch
-across all your repos — and reconstructs *why you started it and what's left* by
-distilling your git history and the AI-coding sessions that touched it. No notes,
-no tickets, no ceremony.
-
-**Pull-only and local-first.** It captures nothing ahead of time and never writes
-inside your repos: it reads git and your AI-session logs *on demand*, so it works
-retroactively on branches you already have. The only network call is the LLM
-command *you* configure (default `claude -p`; any stdin→stdout command works).
-Every reconstruction ships a **confidence score** and an auditable `## Sources`
-section — see [SECURITY.md](SECURITY.md).
+across all your repos, listed in seconds — and reconstructs *why you started it
+and what's left* by distilling your git history and the AI-coding sessions that
+touched it. No notes, no tickets, no ceremony.
 
 <!-- Demo GIF: generate with `agg docs/demo.cast docs/demo.gif`
      (install agg: `cargo install --git https://github.com/asciinema/agg`),
@@ -46,6 +39,13 @@ Adding OAuth login to unblock the onboarding flow.
 ## Next step
 Implement refresh token rotation in auth/refresh.rs and add an expiry test.
 ```
+
+**Pull-only and local-first.** It captures nothing ahead of time and never writes
+inside your repos: it reads git and your AI-session logs *on demand*, so it works
+retroactively on branches you already have. The only network call is the LLM
+command *you* configure (default `claude -p`; any stdin→stdout command works).
+Every reconstruction ships a **confidence score** and an auditable `## Sources`
+section — see [SECURITY.md](SECURITY.md).
 
 ## Install
 
@@ -143,6 +143,19 @@ Recommended flow when confidence is not `high`:
 2. Check **`## Sources`** in the full output — do those commits and sessions belong to this work?
 3. Run `loops resume <branch>` only when the evidence looks right.
 
+## Why not just…?
+
+| Alternative | What breaks |
+|---|---|
+| `git branch -a` + re-reading diffs | Shows the *code*, not the context — you still reconstruct "why" and "what's next" in your head, per branch. |
+| Notes / journals / TODO files | Require discipline *before* you pause. Nobody writes the note on the branch they abandon in a hurry. |
+| Issue trackers | Ceremony up front, drift afterwards — the ticket rarely matches where the branch actually stopped. |
+| Grepping old AI session logs | The context is in there, but digging it out by hand is exactly the archaeology `loops` automates. |
+
+The difference is **retroactive**: every alternative needs you to have done
+something *at pause time*. `loops` works on branches you already walked away
+from, because git history and session logs were captured anyway.
+
 ## Demo
 
 Record or replay locally:
@@ -169,3 +182,9 @@ labelled [`good first issue`](https://github.com/carvalhosauro/open-loops/labels
 ## License
 
 MIT OR Apache-2.0.
+
+---
+
+If `loops` rescued a branch you'd given up on, [star the repo](https://github.com/carvalhosauro/open-loops)
+and tell the friend whose `git branch` output looks like a graveyard — that's how
+they'll find it.
