@@ -1,6 +1,11 @@
 # Changelog
 ## unreleased
 
+## 1.7.1 - 2026-07-17
+
+### Docs
+- Show demo before prose, add comparison section and shareable footer ([#60](https://github.com/carvalhosauro/open-loops/pull/60))
+
 ## 1.7.0 - 2026-07-13
 
 ### Docs
